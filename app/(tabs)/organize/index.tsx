@@ -62,10 +62,38 @@ const nowIso = () => new Date().toISOString();
 const plusHoursIso = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
 
 const PLACE_LOG_PREFIX = "[organize][place]";
+const SAFETY_LOG_PREFIX = "[organize][safety]";
 
 const AU_STATE_CODES = ["VIC", "NSW", "QLD", "SA", "WA", "TAS", "ACT", "NT"] as const;
 const AU_STATE_REGEX = new RegExp(`\\b(?:${AU_STATE_CODES.join("|")})\\b`, "i");
-const AU_POSTCODE_REGEX = /\b\d{4}\b/;
+const AU_POSTCODE_REGEX = /\b\d{4}\b/g;
+
+const AMBIGUOUS_WARN_M = 5_000;
+const AMBIGUOUS_STRONG_WARN_M = 50_000;
+const CAPITAL_HINT_WARN_M = 80_000;
+const CAPITAL_HINT_STRONG_WARN_M = 250_000;
+
+const CAPITAL_HINTS: Array<{ name: string; lat: number; lng: number }> = [
+  { name: "Melbourne", lat: MELBOURNE_CBD.lat, lng: MELBOURNE_CBD.lng },
+  { name: "Sydney", lat: -33.8688, lng: 151.2093 },
+  { name: "Brisbane", lat: -27.4698, lng: 153.0251 },
+  { name: "Adelaide", lat: -34.9285, lng: 138.6007 },
+  { name: "Perth", lat: -31.9523, lng: 115.8613 },
+  { name: "Hobart", lat: -42.8821, lng: 147.3272 },
+  { name: "Canberra", lat: -35.2809, lng: 149.13 },
+  { name: "Darwin", lat: -12.4634, lng: 130.8456 },
+];
+
+const AU_STATE_NAME_TO_CODE: Record<string, (typeof AU_STATE_CODES)[number]> = {
+  VICTORIA: "VIC",
+  "NEW SOUTH WALES": "NSW",
+  QUEENSLAND: "QLD",
+  "SOUTH AUSTRALIA": "SA",
+  "WESTERN AUSTRALIA": "WA",
+  TASMANIA: "TAS",
+  "AUSTRALIAN CAPITAL TERRITORY": "ACT",
+  "NORTHERN TERRITORY": "NT",
+};
 
 async function getEffectiveUserId(): Promise<string> {
   try {
@@ -173,6 +201,66 @@ function buildFullAddressAlertBody(missing: string[]): string {
   lines.push("Example: 211 La Trobe St, Melbourne VIC 3000");
   return lines.join("\n");
 }
+
+function extractAddressStateCodeAU(address: string): (typeof AU_STATE_CODES)[number] | null {
+  const m = address.match(AU_STATE_REGEX);
+  if (!m) return null;
+  const code = String(m[0] ?? "").trim().toUpperCase();
+  return (AU_STATE_CODES as readonly string[]).includes(code) ? (code as any) : null;
+}
+
+function extractAddressPostcodeAU(address: string): string | null {
+  const all = Array.from(address.matchAll(AU_POSTCODE_REGEX)).map((m) => m[0]);
+  return all.length > 0 ? all[all.length - 1] : null;
+}
+
+function normalizeReverseStateCode(regionLike: unknown): (typeof AU_STATE_CODES)[number] | null {
+  const raw = String(regionLike ?? "").trim();
+  if (!raw) return null;
+
+  const up = raw.toUpperCase();
+
+  if ((AU_STATE_CODES as readonly string[]).includes(up)) return up as any;
+
+  const compact = up.replace(/\s+/g, " ").trim();
+  if (AU_STATE_NAME_TO_CODE[compact]) return AU_STATE_NAME_TO_CODE[compact];
+
+  // Some providers return "Victoria, Australia" etc.
+  const head = compact.split(",")[0]?.trim() ?? "";
+  if (AU_STATE_NAME_TO_CODE[head]) return AU_STATE_NAME_TO_CODE[head];
+
+  return null;
+}
+
+function extractReversePostcodeAU(postalCodeLike: unknown): string | null {
+  const raw = String(postalCodeLike ?? "").trim();
+  if (!raw) return null;
+  const m = raw.match(/\b\d{4}\b/);
+  return m ? m[0] : null;
+}
+
+function detectCapitalHint(address: string): { name: string; lat: number; lng: number } | null {
+  const a = address.trim().toLowerCase();
+  if (!a) return null;
+  for (const c of CAPITAL_HINTS) {
+    if (a.includes(c.name.toLowerCase())) return c;
+  }
+  return null;
+}
+
+function formatDistance(meters: number): string {
+  if (!Number.isFinite(meters)) return "-";
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  const km = meters / 1000;
+  if (km < 10) return `${km.toFixed(2)} km`;
+  if (km < 100) return `${km.toFixed(1)} km`;
+  return `${Math.round(km)} km`;
+}
+
+type CreateSafetyDecision =
+  | { kind: "ok"; reasonCodes: string[]; debug: any }
+  | { kind: "warn"; title: string; message: string; reasonCodes: string[]; debug: any }
+  | { kind: "block"; title: string; message: string; reasonCodes: string[]; debug: any };
 
 export default function OrganizeIndexScreen() {
   const router = useRouter();
@@ -711,6 +799,279 @@ export default function OrganizeIndexScreen() {
     [openWebUrl]
   );
 
+  const confirmProceedWithSafetyWarning = useCallback(
+    async (titleText: string, messageText: string, mapsQuery: string): Promise<boolean> => {
+      return await new Promise<boolean>((resolve) => {
+        Alert.alert(
+          titleText,
+          messageText,
+          [
+            { text: "Cancel", style: "cancel", onPress: () => resolve(false) },
+            {
+              text: "OPEN MAPS",
+              onPress: () => {
+                void openGoogleMapsSearch(mapsQuery || "Australia");
+                resolve(false);
+              },
+            },
+            { text: "Continue", style: "default", onPress: () => resolve(true) },
+          ],
+          { cancelable: true, onDismiss: () => resolve(false) }
+        );
+      });
+    },
+    [openGoogleMapsSearch]
+  );
+
+  const showSafetyBlockAlert = useCallback(
+    (titleText: string, messageText: string, mapsQuery: string) => {
+      Alert.alert(
+        titleText,
+        messageText,
+        [
+          {
+            text: "OPEN MAPS",
+            onPress: () => {
+              void openGoogleMapsSearch(mapsQuery || "Australia");
+            },
+          },
+          { text: "OK", style: "default" },
+        ],
+        { cancelable: true }
+      );
+    },
+    [openGoogleMapsSearch]
+  );
+
+  const runCreateLocationSafetyCheck = useCallback(
+    async (
+      address: string,
+      resolvedLat: number,
+      resolvedLng: number,
+      geocodeRawHint: Location.LocationGeocodedLocation[] | null
+    ): Promise<CreateSafetyDecision> => {
+      const reasonCodes: string[] = [];
+      const debug: any = {
+        address,
+        resolvedLat,
+        resolvedLng,
+      };
+
+      const addrState = extractAddressStateCodeAU(address);
+      const addrPostcode = extractAddressPostcodeAU(address);
+
+      debug.addrState = addrState;
+      debug.addrPostcode = addrPostcode;
+
+      let capitalHintName: string | null = null;
+      let capitalDistanceM: number | null = null;
+
+      const cap = detectCapitalHint(address);
+      if (cap) {
+        capitalHintName = cap.name;
+        capitalDistanceM = distanceMetersHaversine(cap.lat, cap.lng, resolvedLat, resolvedLng);
+        debug.capitalHint = { name: cap.name, distM: capitalDistanceM };
+        if (capitalDistanceM >= CAPITAL_HINT_STRONG_WARN_M) {
+          reasonCodes.push("TOO_FAR");
+        } else if (capitalDistanceM >= CAPITAL_HINT_WARN_M) {
+          reasonCodes.push("TOO_FAR");
+        }
+      }
+
+      let spreadDistanceM: number | null = null;
+      let spreadUsedCount = 0;
+
+      try {
+        const raw = geocodeRawHint ?? (await Location.geocodeAsync(address));
+        const validInOrder = (raw ?? [])
+          .map((r) => {
+            const latN = typeof (r as any).latitude === "number" ? (r as any).latitude : Number((r as any).latitude);
+            const lngN = typeof (r as any).longitude === "number" ? (r as any).longitude : Number((r as any).longitude);
+            if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return null;
+            if (!isValidLatLngRange(latN, lngN)) return null;
+            return { lat: latN, lng: lngN };
+          })
+          .filter((x): x is { lat: number; lng: number } => !!x);
+
+        spreadUsedCount = validInOrder.length;
+
+        if (validInOrder.length >= 3) {
+          spreadDistanceM = distanceMetersHaversine(
+            validInOrder[0].lat,
+            validInOrder[0].lng,
+            validInOrder[2].lat,
+            validInOrder[2].lng
+          );
+          debug.candidateSpread = {
+            usedCount: validInOrder.length,
+            d13m: spreadDistanceM,
+            top3: validInOrder.slice(0, 3).map((v) => ({
+              lat: Number(v.lat.toFixed(6)),
+              lng: Number(v.lng.toFixed(6)),
+            })),
+          };
+
+          if (spreadDistanceM >= AMBIGUOUS_STRONG_WARN_M) {
+            reasonCodes.push("AMBIGUOUS");
+          } else if (spreadDistanceM >= AMBIGUOUS_WARN_M) {
+            reasonCodes.push("AMBIGUOUS");
+          }
+        } else {
+          debug.candidateSpread = { usedCount: validInOrder.length };
+        }
+      } catch (e: any) {
+        debug.candidateSpreadError = e?.message ?? String(e);
+      }
+
+      let reverse: Location.LocationGeocodedAddress | null = null;
+      let reverseError: string | null = null;
+
+      try {
+        const rev = await Location.reverseGeocodeAsync({ latitude: resolvedLat, longitude: resolvedLng });
+        reverse = (rev?.[0] as any) ?? null;
+      } catch (e: any) {
+        reverseError = e?.message ?? String(e);
+      }
+
+      if (!reverse) {
+        reasonCodes.push("REVERSE_UNAVAILABLE");
+        debug.reverse = null;
+        debug.reverseError = reverseError ?? "No reverse results";
+      } else {
+        const isoCountry = String((reverse as any)?.isoCountryCode ?? "").trim().toUpperCase();
+        const country = String((reverse as any)?.country ?? "").trim();
+        const region = String((reverse as any)?.region ?? (reverse as any)?.subregion ?? "").trim();
+        const postalCode = String((reverse as any)?.postalCode ?? "").trim();
+        const city = String((reverse as any)?.city ?? (reverse as any)?.district ?? "").trim();
+        const name = String((reverse as any)?.name ?? "").trim();
+        const street = String((reverse as any)?.street ?? "").trim();
+
+        const revState = normalizeReverseStateCode(region);
+        const revPostcode = extractReversePostcodeAU(postalCode);
+
+        debug.reverse = {
+          isoCountryCode: isoCountry || null,
+          country: country || null,
+          region: region || null,
+          stateCode: revState,
+          postalCode: revPostcode,
+          city: city || null,
+          name: name || null,
+          street: street || null,
+        };
+
+        const countryLooksAU = (() => {
+          if (isoCountry) return isoCountry === "AU";
+          if (!country) return null;
+          return country.toLowerCase().includes("australia");
+        })();
+
+        if (countryLooksAU === false) {
+          reasonCodes.push("COUNTRY_NOT_AU");
+          const lines: string[] = [];
+          lines.push("The resolved location looks outside Australia.");
+          lines.push("");
+          lines.push(`Address: ${address}`);
+          lines.push(`Resolved: ${resolvedLat.toFixed(6)}, ${resolvedLng.toFixed(6)}`);
+          lines.push(`Reverse country: ${isoCountry || country || "(unknown)"}`);
+          lines.push("");
+          lines.push("Please open Google Maps, copy the FULL address, and paste it again.");
+          lines.push("");
+          lines.push("Open Google Maps → select the place → Share → Copy address → paste it here.");
+          const msg = lines.join("\n");
+
+          console.log(`${SAFETY_LOG_PREFIX} block COUNTRY_NOT_AU`, { reasonCodes, debug });
+
+          return { kind: "block", title: "Location mismatch", message: msg, reasonCodes, debug };
+        }
+
+        if (addrState && revState && addrState !== revState) {
+          reasonCodes.push("STATE_MISMATCH");
+          const lines: string[] = [];
+          lines.push("State mismatch between your address and the resolved coordinates.");
+          lines.push("");
+          lines.push(`Address: ${address}`);
+          lines.push(`Address state: ${addrState}`);
+          lines.push(`Reverse state: ${revState}`);
+          lines.push(`Resolved: ${resolvedLat.toFixed(6)}, ${resolvedLng.toFixed(6)}`);
+          lines.push("");
+          lines.push("Please open Google Maps, copy the FULL address, and paste it again.");
+          const msg = lines.join("\n");
+
+          console.log(`${SAFETY_LOG_PREFIX} block STATE_MISMATCH`, { reasonCodes, debug });
+
+          return { kind: "block", title: "Location mismatch", message: msg, reasonCodes, debug };
+        }
+
+        if (addrPostcode && revPostcode && addrPostcode !== revPostcode) {
+          reasonCodes.push("POSTCODE_MISMATCH");
+          const lines: string[] = [];
+          lines.push("Postcode mismatch between your address and the resolved coordinates.");
+          lines.push("");
+          lines.push(`Address: ${address}`);
+          lines.push(`Address postcode: ${addrPostcode}`);
+          lines.push(`Reverse postcode: ${revPostcode}`);
+          lines.push(`Resolved: ${resolvedLat.toFixed(6)}, ${resolvedLng.toFixed(6)}`);
+          lines.push("");
+          lines.push("Please open Google Maps, copy the FULL address, and paste it again.");
+          const msg = lines.join("\n");
+
+          console.log(`${SAFETY_LOG_PREFIX} block POSTCODE_MISMATCH`, { reasonCodes, debug });
+
+          return { kind: "block", title: "Location mismatch", message: msg, reasonCodes, debug };
+        }
+      }
+
+      const uniqueReasons = Array.from(new Set(reasonCodes));
+      debug.reasonCodes = uniqueReasons;
+
+      const shouldWarn = uniqueReasons.some((r) => r === "REVERSE_UNAVAILABLE" || r === "AMBIGUOUS" || r === "TOO_FAR");
+      if (!shouldWarn) {
+        console.log(`${SAFETY_LOG_PREFIX} ok`, { reasonCodes: uniqueReasons, debug });
+        return { kind: "ok", reasonCodes: uniqueReasons, debug };
+      }
+
+      const lines: string[] = [];
+      const hasStrongAmbiguous = spreadDistanceM !== null && spreadDistanceM >= AMBIGUOUS_STRONG_WARN_M;
+      const hasStrongFar = capitalDistanceM !== null && capitalDistanceM >= CAPITAL_HINT_STRONG_WARN_M;
+
+      const warnTitle = hasStrongAmbiguous || hasStrongFar ? "Verify location (important)" : "Verify location";
+      lines.push("Please verify the resolved location before creating this event.");
+      lines.push("");
+      lines.push(`Address: ${address}`);
+      lines.push(`Resolved: ${resolvedLat.toFixed(6)}, ${resolvedLng.toFixed(6)}`);
+
+      if (capitalHintName && capitalDistanceM !== null) {
+        lines.push(`Distance to ${capitalHintName}: ${formatDistance(capitalDistanceM)}`);
+      }
+
+      if (spreadDistanceM !== null) {
+        lines.push(`Geocode candidate spread (1st↔3rd): ${formatDistance(spreadDistanceM)}`);
+        lines.push(`Candidates used: ${spreadUsedCount}`);
+      }
+
+      const rev = debug.reverse as any;
+      if (rev && typeof rev === "object") {
+        const ctry = rev.isoCountryCode || rev.country || "(unknown)";
+        const st = rev.stateCode || rev.region || "(unknown)";
+        const pc = rev.postalCode || "(unknown)";
+        lines.push(`Reverse: ${ctry}, ${st} ${pc}`);
+      } else {
+        lines.push("Reverse: unavailable (cannot validate state/postcode)");
+      }
+
+      lines.push("");
+      lines.push(`Reason codes: ${uniqueReasons.join(", ")}`);
+
+      const msg = lines.join("\n");
+
+      console.log(`${SAFETY_LOG_PREFIX} warn`, { reasonCodes: uniqueReasons, debug });
+
+      return { kind: "warn", title: warnTitle, message: msg, reasonCodes: uniqueReasons, debug };
+    },
+    []
+  );
+
   const setCoordsFromAddress = useCallback(async () => {
     setSubmitError(null);
 
@@ -855,6 +1216,8 @@ export default function OrganizeIndexScreen() {
       let finalLatN: number | null = null;
       let finalLngN: number | null = null;
 
+      let geocodeRawForSafety: Location.LocationGeocodedLocation[] | null = null;
+
       if (coordsManual) {
         if (!existingCoordsValid) {
           setErrorsAndScroll({
@@ -875,6 +1238,8 @@ export default function OrganizeIndexScreen() {
           setAddrGeocoding(true);
           try {
             const raw = await Location.geocodeAsync(address);
+            geocodeRawForSafety = raw ?? null;
+
             const first = raw?.[0];
 
             const latN = first ? Number((first as any).latitude) : NaN;
@@ -917,6 +1282,25 @@ export default function OrganizeIndexScreen() {
         return;
       }
 
+      // Step 4: Create-time safety check (skip entirely for manual coords)
+      if (!coordsManual) {
+        const decision = await runCreateLocationSafetyCheck(address, finalLatN, finalLngN, geocodeRawForSafety);
+
+        if (decision.kind === "block") {
+          setErrorsAndScroll({
+            address: "Address and coordinates do not match. Please paste the full address from Google Maps again.",
+            coords: "Blocked: resolved location failed safety checks. Fix the address or use Advanced lat/lng.",
+          });
+          showSafetyBlockAlert(decision.title, decision.message, address);
+          return;
+        }
+
+        if (decision.kind === "warn") {
+          const proceed = await confirmProceedWithSafetyWarning(decision.title, decision.message, address);
+          if (!proceed) return;
+        }
+      }
+
       const payload = {
         group_id: groupId,
         title: eventTitle,
@@ -947,6 +1331,8 @@ export default function OrganizeIndexScreen() {
       setAddrGeocoding(false);
     }
   }, [
+    clearFieldError,
+    confirmProceedWithSafetyWarning,
     coordsAddressSnapshot,
     coordsManual,
     endUtc,
@@ -958,12 +1344,14 @@ export default function OrganizeIndexScreen() {
     lng,
     locationName,
     radiusM,
-    setErrorsAndScroll,
+    runCreateLocationSafetyCheck,
     scrollToField,
+    setErrorsAndScroll,
+    showSafetyBlockAlert,
     startUtc,
     title,
+    validateIso,
     windowMin,
-    clearFieldError,
   ]);
 
   const openEvent = useCallback(
