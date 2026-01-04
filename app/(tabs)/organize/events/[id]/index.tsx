@@ -1,4 +1,4 @@
-// app/(tabs)/organize/events/[id].tsx
+// app/(tabs)/organize/events/[id]/index.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -15,11 +15,15 @@ import {
 import { useLocalSearchParams, router, usePathname } from "expo-router";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { supabase } from "../../../../lib/supabase";
-import { haversineMeters, accuracyThreshold } from "../../../../lib/geo";
-import { getGuestId } from "../../../../stores/session";
-import { useEffectiveRole } from "../../../../stores/devRole";
-import { armGeofenceAt, disarmGeofence, geofenceStatus } from "../../../../lib/geofenceActions";
+import { supabase } from "../../../../../lib/supabase";
+import { haversineMeters, accuracyThreshold } from "../../../../../lib/geo";
+import { getGuestId } from "../../../../../stores/session";
+import { useEffectiveRole } from "../../../../../stores/devRole";
+import {
+  armGeofenceAt,
+  disarmGeofence,
+  geofenceStatus,
+} from "../../../../../lib/geofenceActions";
 
 type EventRow = {
   id: string;
@@ -950,6 +954,21 @@ export default function OrganizeEventDetail() {
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>Organizer</Text>
 
+          <TouchableOpacity
+            style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
+            onPress={() =>
+              router.push({
+                pathname: "/organize/events/[id]/location",
+                params: { id: eventRow.id },
+              })
+            }
+            disabled={deleteBusy}
+          >
+            <Text style={styles.btnOutlineText}>EDIT LOCATION</Text>
+          </TouchableOpacity>
+
+          <View style={{ height: 10 }} />
+
           <Row label="Attendee check" value={attendeeCheckStatus} />
           <View style={{ height: 8 }} />
           <TouchableOpacity
@@ -990,7 +1009,11 @@ export default function OrganizeEventDetail() {
             </Text>
 
             <View style={{ height: 8 }} />
-            <TouchableOpacity style={[styles.btnOutline]} onPress={showProofLog} disabled={deleteBusy}>
+            <TouchableOpacity
+              style={[styles.btnOutline]}
+              onPress={showProofLog}
+              disabled={deleteBusy}
+            >
               <Text style={styles.btnOutlineText}>VIEW PROOF LOG</Text>
             </TouchableOpacity>
 
@@ -1094,7 +1117,9 @@ export default function OrganizeEventDetail() {
             onPress={handleDeleteEvent}
             disabled={deleteBusy}
           >
-            <Text style={styles.btnDangerText}>{deleteBusy ? "DELETING…" : "DELETE EVENT"}</Text>
+            <Text style={styles.btnDangerText}>
+              {deleteBusy ? "DELETING…" : "DELETE EVENT"}
+            </Text>
           </TouchableOpacity>
         </View>
       )}

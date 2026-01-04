@@ -27,8 +27,8 @@ module.exports = function (api) {
             "@/lib": "./lib",
 
             // (optional legacy) keep organize for direct imports if any
-            "@organize": "./app/organize",
-            "@/organize": "./app/organize"
+            "@organize": "./archive/legacy_routes/organize",
+            "@/organize": "./archive/legacy_routes/organize"
           },
           extensions: [".ts", ".tsx", ".js", ".jsx", ".json"]
         }
