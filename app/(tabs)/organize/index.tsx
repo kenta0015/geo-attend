@@ -36,6 +36,7 @@ type EventRow = {
   radius_m: number | null;
   window_minutes: number | null;
   location_name: string | null;
+  address_text: string | null;
   group_id: string | null;
 };
 
@@ -72,6 +73,10 @@ const AMBIGUOUS_WARN_M = 5_000;
 const AMBIGUOUS_STRONG_WARN_M = 50_000;
 const CAPITAL_HINT_WARN_M = 80_000;
 const CAPITAL_HINT_STRONG_WARN_M = 250_000;
+
+const RADIUS_PRESETS_M = [50, 100, 200, 300] as const;
+const RADIUS_MIN_M = 10;
+const RADIUS_MAX_M = 1000;
 
 const CAPITAL_HINTS: Array<{ name: string; lat: number; lng: number }> = [
   { name: "Melbourne", lat: MELBOURNE_CBD.lat, lng: MELBOURNE_CBD.lng },
@@ -225,7 +230,6 @@ function normalizeReverseStateCode(regionLike: unknown): (typeof AU_STATE_CODES)
   const compact = up.replace(/\s+/g, " ").trim();
   if (AU_STATE_NAME_TO_CODE[compact]) return AU_STATE_NAME_TO_CODE[compact];
 
-  // Some providers return "Victoria, Australia" etc.
   const head = compact.split(",")[0]?.trim() ?? "";
   if (AU_STATE_NAME_TO_CODE[head]) return AU_STATE_NAME_TO_CODE[head];
 
@@ -277,7 +281,6 @@ export default function OrganizeIndexScreen() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // form
   const [title, setTitle] = useState<string>("");
   const [groupId, setGroupId] = useState<string | null>(null);
   const [startUtc, setStartUtc] = useState<string>(nowIso());
@@ -287,22 +290,20 @@ export default function OrganizeIndexScreen() {
   const [lng, setLng] = useState<string>("");
   const [coordsManual, setCoordsManual] = useState(false);
   const [coordsAddressSnapshot, setCoordsAddressSnapshot] = useState<string | null>(null);
-  const [locationName, setLocationName] = useState<string>("");
-  const [radiusM, setRadiusM] = useState<string>("50");
+  const [venueName, setVenueName] = useState<string>("");
+  const [addressText, setAddressText] = useState<string>("");
+  const [radiusM, setRadiusM] = useState<string>("100");
   const [windowMin, setWindowMin] = useState<string>("30");
   const [submitting, setSubmitting] = useState(false);
 
-  // validation UI (run only on Create)
   const [formErrors, setFormErrors] = useState<FormErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
 
   const [createCardY, setCreateCardY] = useState(0);
   const [fieldY, setFieldY] = useState<Partial<Record<FieldKey, number>>>({});
 
-  // Address -> Coords helper
   const [addrGeocoding, setAddrGeocoding] = useState(false);
 
-  // location search (kept as optional helper; may be inaccurate depending on device/provider)
   const [placeQuery, setPlaceQuery] = useState<string>("");
   const [placeResults, setPlaceResults] = useState<PlaceCandidate[]>([]);
   const [placeError, setPlaceError] = useState<string | null>(null);
@@ -311,10 +312,8 @@ export default function OrganizeIndexScreen() {
   const [showAdvancedLocation, setShowAdvancedLocation] = useState(false);
   const [showPlaceSearch, setShowPlaceSearch] = useState(false);
 
-  // Manage Groups modal
   const [manageOpen, setManageOpen] = useState(false);
 
-  // Start picker (Phase A)
   const [startPickerOpen, setStartPickerOpen] = useState(false);
   const [startPickerStep, setStartPickerStep] = useState<"date" | "time">("date");
   const [tempStartLocal, setTempStartLocal] = useState<Date>(() => safeParseIso(nowIso()));
@@ -423,7 +422,7 @@ export default function OrganizeIndexScreen() {
 
       const ev = await supabase
         .from("events")
-        .select("id, title, start_utc, end_utc, lat, lng, radius_m, window_minutes, location_name, group_id")
+        .select("id, title, start_utc, end_utc, lat, lng, radius_m, window_minutes, location_name, address_text, group_id")
         .eq("group_id", gid)
         .order("start_utc", { ascending: false })
         .limit(20);
@@ -676,11 +675,11 @@ export default function OrganizeIndexScreen() {
       if (formErrors.coords) clearFieldError("coords");
       setSubmitError(null);
 
-      if (!locationName.trim()) setLocationName(p.title);
+      if (!venueName.trim()) setVenueName(p.title);
       setPlaceError(null);
       notify("Coordinates set from quick search. Please paste the full address from Google Maps into Venue address.");
     },
-    [clearFieldError, formErrors.coords, locationName, notify]
+    [clearFieldError, formErrors.coords, notify, venueName]
   );
 
   const openManageGroups = useCallback(() => setManageOpen(true), []);
@@ -730,7 +729,7 @@ export default function OrganizeIndexScreen() {
 
     notify("Start updated (End auto-set to +60 minutes).");
     closeStartPicker();
-  }, [clearFieldError, closeStartPicker, formErrors.end, formErrors.start, tempStartLocal]);
+  }, [clearFieldError, closeStartPicker, formErrors.end, formErrors.start, notify, tempStartLocal]);
 
   const openStartPickerAndroid = useCallback(() => {
     const initial = safeParseIso(startUtc);
@@ -774,7 +773,7 @@ export default function OrganizeIndexScreen() {
         });
       },
     });
-  }, [clearFieldError, formErrors.end, formErrors.start, startUtc]);
+  }, [clearFieldError, formErrors.end, formErrors.start, notify, startUtc]);
 
   const openStartPicker = useCallback(() => {
     if (Platform.OS === "android") openStartPickerAndroid();
@@ -1075,7 +1074,7 @@ export default function OrganizeIndexScreen() {
   const setCoordsFromAddress = useCallback(async () => {
     setSubmitError(null);
 
-    const addr = locationName.trim();
+    const addr = addressText.trim();
     if (!addr) {
       setFieldErrorAndScroll("address", "Venue address is required to set coordinates.");
       return;
@@ -1130,10 +1129,10 @@ export default function OrganizeIndexScreen() {
       setAddrGeocoding(false);
     }
   }, [
+    addressText,
     clearFieldError,
     formErrors.address,
     formErrors.coords,
-    locationName,
     notify,
     scrollToField,
     setFieldErrorAndScroll,
@@ -1167,7 +1166,7 @@ export default function OrganizeIndexScreen() {
       }
     }
 
-    const address = locationName.trim();
+    const address = addressText.trim();
     if (!address) errs.address = "Venue address is required.";
 
     if (address && !coordsManual) {
@@ -1186,7 +1185,10 @@ export default function OrganizeIndexScreen() {
     if (!wTrim) errs.window = "Window is required.";
 
     const r = Number(rTrim);
-    if (rTrim && (!Number.isFinite(r) || r <= 0)) errs.radius = "Radius must be a positive number.";
+    if (rTrim && !Number.isFinite(r)) errs.radius = "Radius must be a number.";
+    if (rTrim && Number.isFinite(r) && (r < RADIUS_MIN_M || r > RADIUS_MAX_M)) {
+      errs.radius = `Radius must be between ${RADIUS_MIN_M} and ${RADIUS_MAX_M} meters.`;
+    }
 
     const w = Number(wTrim);
     if (wTrim && (!Number.isFinite(w) || w < 0)) errs.window = "Window must be 0 or more.";
@@ -1282,7 +1284,6 @@ export default function OrganizeIndexScreen() {
         return;
       }
 
-      // Step 4: Create-time safety check (skip entirely for manual coords)
       if (!coordsManual) {
         const decision = await runCreateLocationSafetyCheck(address, finalLatN, finalLngN, geocodeRawForSafety);
 
@@ -1301,6 +1302,7 @@ export default function OrganizeIndexScreen() {
         }
       }
 
+      const venueNameTrim = venueName.trim();
       const payload = {
         group_id: groupId,
         title: eventTitle,
@@ -1310,7 +1312,8 @@ export default function OrganizeIndexScreen() {
         lng: finalLngN,
         radius_m: r,
         window_minutes: w,
-        location_name: address,
+        location_name: venueNameTrim ? venueNameTrim : null,
+        address_text: address,
       };
 
       const res = await supabase.from("events").insert(payload).select("id").single();
@@ -1322,7 +1325,8 @@ export default function OrganizeIndexScreen() {
       setSubmitError(null);
 
       setTitle("");
-      setLocationName("");
+      setVenueName("");
+      setAddressText("");
       await fetchEventsForGroup(groupId);
     } catch (e: any) {
       setSubmitError(e?.message ?? "Failed to create event");
@@ -1331,6 +1335,7 @@ export default function OrganizeIndexScreen() {
       setAddrGeocoding(false);
     }
   }, [
+    addressText,
     clearFieldError,
     confirmProceedWithSafetyWarning,
     coordsAddressSnapshot,
@@ -1342,7 +1347,6 @@ export default function OrganizeIndexScreen() {
     groupId,
     lat,
     lng,
-    locationName,
     radiusM,
     runCreateLocationSafetyCheck,
     scrollToField,
@@ -1351,6 +1355,7 @@ export default function OrganizeIndexScreen() {
     startUtc,
     title,
     validateIso,
+    venueName,
     windowMin,
   ]);
 
@@ -1372,16 +1377,30 @@ export default function OrganizeIndexScreen() {
     return !!lat && !!lng && !Number.isNaN(latN) && !Number.isNaN(lngN) && isValidLatLngRange(latN, lngN);
   }, [lat, lng]);
 
-  const addressText = useMemo(() => locationName.trim(), [locationName]);
+  const addressTrimmed = useMemo(() => addressText.trim(), [addressText]);
+
+  const mapsQuery = useMemo(() => {
+    const a = addressText.trim();
+    if (a) return a;
+    const v = venueName.trim();
+    if (v) return v;
+    return "Melbourne";
+  }, [addressText, venueName]);
 
   const coordsStale = useMemo(() => {
-    const addr = locationName.trim();
+    const addr = addressText.trim();
     if (!addr) return false;
     if (!hasCoords) return false;
     if (coordsManual) return false;
     if (!coordsAddressSnapshot) return false;
     return coordsAddressSnapshot.trim() !== addr;
-  }, [coordsAddressSnapshot, coordsManual, hasCoords, locationName]);
+  }, [addressText, coordsAddressSnapshot, coordsManual, hasCoords]);
+
+  const activeRadiusPreset = useMemo(() => {
+    const n = Number(radiusM.trim());
+    if (!Number.isFinite(n)) return null;
+    return (RADIUS_PRESETS_M as readonly number[]).includes(n) ? n : null;
+  }, [radiusM]);
 
   if (loading) {
     return (
@@ -1565,14 +1584,26 @@ export default function OrganizeIndexScreen() {
           <View style={{ height: 6 }} />
 
           <View onLayout={registerFieldY("address")}>
-            <Text style={styles.label}>Venue address (required)</Text>
+            <Text style={styles.label}>Venue name (optional)</Text>
+            <TextInput
+              style={styles.input}
+              placeholder='e.g. "Melbourne Central" / "Uni Library"'
+              value={venueName}
+              onChangeText={(t) => {
+                setVenueName(t);
+                setSubmitError(null);
+              }}
+              autoCapitalize="words"
+              autoCorrect={false}
+            />
 
+            <Text style={styles.label}>Venue address (required)</Text>
             <TextInput
               style={styles.input}
               placeholder="Paste full address from Google Maps (e.g. 211 La Trobe St, Melbourne VIC 3000)"
-              value={locationName}
+              value={addressText}
               onChangeText={(t) => {
-                setLocationName(t);
+                setAddressText(t);
                 if (formErrors.address) clearFieldError("address");
                 setSubmitError(null);
               }}
@@ -1581,14 +1612,13 @@ export default function OrganizeIndexScreen() {
             />
 
             <Text style={[styles.helpSmall, { marginTop: -2 }]}>
-              If you only know a place name (e.g. &quot;Chadstone Shopping Centre&quot;), search it in Google Maps, then
-              paste the full address here.
+              If you only know a place name, search it in Google Maps, then paste the full address here.
             </Text>
 
             <View style={{ height: 10 }} />
 
             <View style={styles.row}>
-              <TouchableOpacity style={styles.btnSmall} onPress={() => openGoogleMapsSearch(addressText || "Melbourne")}>
+              <TouchableOpacity style={styles.btnSmall} onPress={() => openGoogleMapsSearch(mapsQuery)}>
                 <Text style={styles.btnSmallText}>OPEN MAPS</Text>
               </TouchableOpacity>
             </View>
@@ -1743,6 +1773,26 @@ export default function OrganizeIndexScreen() {
                   }}
                   keyboardType="number-pad"
                 />
+
+                <View style={styles.presetRow}>
+                  {(RADIUS_PRESETS_M as readonly number[]).map((v) => {
+                    const active = activeRadiusPreset === v;
+                    return (
+                      <TouchableOpacity
+                        key={`r-${v}`}
+                        style={[styles.presetChip, active && styles.presetChipActive]}
+                        onPress={() => {
+                          setRadiusM(String(v));
+                          if (formErrors.radius) clearFieldError("radius");
+                          setSubmitError(null);
+                        }}
+                      >
+                        <Text style={[styles.presetChipText, active && styles.presetChipTextActive]}>{v}m</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
                 {renderFieldError("radius")}
               </View>
 
@@ -1772,8 +1822,8 @@ export default function OrganizeIndexScreen() {
           </TouchableOpacity>
 
           <Text style={styles.helpSmall}>
-            Required: title + venue address. Coordinates are auto-derived from address on Create (or use Advanced lat/lng).
-            Times are stored as UTC ISO. Coordinates are used for geofence check-in.
+            Required: title + venue address. Venue name is optional. Coordinates are auto-derived from address on Create
+            (or use Advanced lat/lng). Times are stored as UTC ISO. Coordinates are used for geofence check-in.
           </Text>
         </View>
       ) : (
@@ -1800,7 +1850,7 @@ export default function OrganizeIndexScreen() {
             const titleText = ev.title ?? "(Untitled event)";
             const start = ev.start_utc ?? "";
             const end = ev.end_utc ?? "";
-            const loc = ev.location_name ?? "";
+            const loc = (ev.address_text ?? ev.location_name ?? "").trim();
             return (
               <TouchableOpacity key={ev.id} style={styles.eventItem} onPress={() => openEvent(ev.id)}>
                 <Text style={styles.eventTitle}>{titleText}</Text>
@@ -2057,6 +2107,27 @@ const styles = StyleSheet.create({
   primaryBtnText: { color: "white", fontWeight: "900" },
   center: { alignItems: "center", justifyContent: "center" },
 
+  presetRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    marginTop: -2,
+    marginBottom: 8,
+  },
+  presetChip: {
+    borderWidth: 1,
+    borderColor: "#D1D5DB",
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: "white",
+    marginRight: 8,
+    marginBottom: 8,
+  },
+  presetChipActive: { backgroundColor: "#111827", borderColor: "#111827" },
+  presetChipText: { color: "#111827", fontWeight: "800" },
+  presetChipTextActive: { color: "white", fontWeight: "900" },
+
   searchRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -2168,3 +2239,4 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 });
+

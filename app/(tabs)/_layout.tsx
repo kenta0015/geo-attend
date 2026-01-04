@@ -94,6 +94,10 @@ export default function TabLayout() {
         <Tabs.Screen name="organize/admin" options={{ href: null }} />
         <Tabs.Screen name="organize/events/[id]" options={{ href: null }} />
         <Tabs.Screen
+          name="organize/events/[id]/location"
+          options={{ href: null }}
+        />
+        <Tabs.Screen
           name="organize/events/[id]/invite"
           options={{ href: null }}
         />
@@ -122,4 +126,3 @@ export default function TabLayout() {
     </HardBoundary>
   );
 }
-
