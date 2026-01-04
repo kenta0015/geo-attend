@@ -44,11 +44,7 @@ const AU_STATE_CODES = [
 function getEventIdParam(params: Record<string, unknown>): string {
   const raw = params?.id;
   if (typeof raw === "string" && raw.trim()) return raw.trim();
-  if (
-    Array.isArray(raw) &&
-    typeof raw[0] === "string" &&
-    raw[0].trim()
-  )
+  if (Array.isArray(raw) && typeof raw[0] === "string" && raw[0].trim())
     return raw[0].trim();
   return "";
 }
@@ -145,6 +141,11 @@ export default function EventLocationEditScreen() {
   const [venueName, setVenueName] = useState<string>("");
   const [addressText, setAddressText] = useState<string>("");
 
+  const [originalAddressText, setOriginalAddressText] = useState<string | null>(
+    null
+  );
+  const [addressDirty, setAddressDirty] = useState(false);
+
   const [latText, setLatText] = useState<string>("");
   const [lngText, setLngText] = useState<string>("");
 
@@ -203,16 +204,19 @@ export default function EventLocationEditScreen() {
       setEventTitle(row.title ?? "");
 
       const initialVenueName = row.location_name ?? "";
-      const initialAddress = row.address_text ?? row.location_name ?? "";
+      const initialAddressText = row.address_text ?? "";
+
+      setOriginalAddressText(row.address_text);
 
       setVenueName(initialVenueName);
-      setAddressText(initialAddress);
+      setAddressText(initialAddressText);
+      setAddressDirty(false);
 
       setLatText(row.lat == null ? "" : String(row.lat));
       setLngText(row.lng == null ? "" : String(row.lng));
 
       setCoordsManual(false);
-      setCoordsAddressSnapshot(initialAddress);
+      setCoordsAddressSnapshot(initialAddressText);
     } catch (e: any) {
       Alert.alert("Error", e?.message ?? "Failed to load event.");
     } finally {
@@ -243,7 +247,10 @@ export default function EventLocationEditScreen() {
     try {
       const results = await Location.geocodeAsync(trimmed);
       if (!results || results.length === 0) {
-        Alert.alert("Geocode failed", "Could not find coordinates for that address.");
+        Alert.alert(
+          "Geocode failed",
+          "Could not find coordinates for that address."
+        );
         return null;
       }
 
@@ -295,28 +302,39 @@ export default function EventLocationEditScreen() {
 
     const nextVenueName = (venueName || "").trim();
     const nextAddress = (addressText || "").trim();
+    const hasAddressNow = nextAddress.length > 0;
 
-    if (!nextAddress) {
+    // Only enforce address required if the user actually edited the address field.
+    // This prevents legacy events (address_text = null) from being unintentionally populated.
+    if (addressDirty && !hasAddressNow) {
       Alert.alert("Missing address", "Please enter the venue address.");
       return;
     }
 
     setSaving(true);
     try {
-      let finalLat: number | null = null;
-      let finalLng: number | null = null;
+      const payload: Partial<EventRow> = {
+        location_name: nextVenueName ? nextVenueName : null,
+      };
+
+      if (addressDirty) {
+        payload.address_text = nextAddress;
+      }
 
       if (coordsManual) {
         const lat = Number((latText || "").trim());
         const lng = Number((lngText || "").trim());
         if (!isValidLatLngRange(lat, lng)) {
-          Alert.alert("Invalid coordinates", "Please enter valid latitude/longitude.");
+          Alert.alert(
+            "Invalid coordinates",
+            "Please enter valid latitude/longitude."
+          );
           setSaving(false);
           return;
         }
-        finalLat = lat;
-        finalLng = lng;
-      } else {
+        payload.lat = lat;
+        payload.lng = lng;
+      } else if (hasAddressNow) {
         const lat = Number((latText || "").trim());
         const lng = Number((lngText || "").trim());
         const hasValidExisting = isValidLatLngRange(lat, lng);
@@ -327,26 +345,30 @@ export default function EventLocationEditScreen() {
             setSaving(false);
             return;
           }
-          finalLat = coords.lat;
-          finalLng = coords.lng;
-          setLatText(String(finalLat));
-          setLngText(String(finalLng));
+          payload.lat = coords.lat;
+          payload.lng = coords.lng;
+          setLatText(String(coords.lat));
+          setLngText(String(coords.lng));
           setCoordsAddressSnapshot(nextAddress);
         } else {
-          finalLat = lat;
-          finalLng = lng;
+          payload.lat = lat;
+          payload.lng = lng;
         }
       }
 
-      const payload: Partial<EventRow> = {
-        location_name: nextVenueName ? nextVenueName : null,
-        address_text: nextAddress,
-        lat: finalLat,
-        lng: finalLng,
-      };
-
-      const { error } = await supabase.from("events").update(payload).eq("id", eventId);
+      const { error } = await supabase
+        .from("events")
+        .update(payload)
+        .eq("id", eventId);
       if (error) throw error;
+
+      // If the save succeeded, refresh the "original" tracking for subsequent edits.
+      if (addressDirty) {
+        setOriginalAddressText(nextAddress);
+        setAddressDirty(false);
+      } else {
+        setOriginalAddressText(originalAddressText ?? null);
+      }
 
       notify("Saved.");
       router.back();
@@ -379,6 +401,10 @@ export default function EventLocationEditScreen() {
     );
   }
 
+  const isLegacyNoAddress =
+    (originalAddressText == null || (originalAddressText || "").trim() === "") &&
+    (addressText || "").trim() === "";
+
   return (
     <KeyboardAvoidingView
       style={[styles.root, { backgroundColor: UI.bg }]}
@@ -386,16 +412,18 @@ export default function EventLocationEditScreen() {
       keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
     >
       <ScrollView
-        contentContainerStyle={[styles.content, { padding: S?.lg ?? 16, gap: S?.md ?? 12 }]}
+        contentContainerStyle={[
+          styles.content,
+          { padding: S?.lg ?? 16, gap: S?.md ?? 12 },
+        ]}
         keyboardShouldPersistTaps="handled"
       >
         <Text style={[styles.title, { color: UI.text }]}>Edit location</Text>
-        {eventTitle ? (
-          <Text style={[styles.subtitle, { color: UI.textMuted }]}>{eventTitle}</Text>
-        ) : null}
 
         <Card>
-          <Text style={[styles.label, { color: UI.textMuted }]}>Venue name (optional)</Text>
+          <Text style={[styles.label, { color: UI.textMuted }]}>
+            Venue name (optional)
+          </Text>
           <TextInput
             style={[
               styles.input,
@@ -416,7 +444,9 @@ export default function EventLocationEditScreen() {
 
           <View style={{ height: 12 }} />
 
-          <Text style={[styles.label, { color: UI.textMuted }]}>Venue address (required)</Text>
+          <Text style={[styles.label, { color: UI.textMuted }]}>
+            Venue address (required)
+          </Text>
           <TextInput
             style={[
               styles.input,
@@ -432,9 +462,8 @@ export default function EventLocationEditScreen() {
             value={addressText}
             onChangeText={(t) => {
               setAddressText(t);
-              if (!coordsManual) {
-                // Keep coordsManual false; we just allow stale detection.
-              }
+              setAddressDirty(true);
+              // Keep coordsManual false; allow stale detection if snapshot exists.
             }}
             autoCorrect={false}
             autoCapitalize="none"
@@ -442,11 +471,26 @@ export default function EventLocationEditScreen() {
             placeholderTextColor={UI.textMuted}
           />
 
+          {isLegacyNoAddress ? (
+            <>
+              <View style={{ height: 8 }} />
+              <Text style={[styles.subtleLeft, { color: UI.textMuted }]}>
+                This event has no saved address yet. You can leave it blank to
+                avoid changing legacy data, or enter a full address if you want
+                to add one.
+              </Text>
+            </>
+          ) : null}
+
           <View style={{ height: 10 }} />
 
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
-              <Button title="Open in Maps" variant="outline" onPress={onOpenMaps} />
+              <Button
+                title="Open in Maps"
+                variant="outline"
+                onPress={onOpenMaps}
+              />
             </View>
             <View style={{ width: 10 }} />
             <View style={{ flex: 1 }}>
@@ -462,8 +506,9 @@ export default function EventLocationEditScreen() {
             <>
               <View style={{ height: 10 }} />
               <Text style={[styles.warn, { color: UI.warn }]}>
-                Address changed since coordinates were set. Please set coordinates from address
-                again (or enable Advanced and enter coordinates manually).
+                Address changed since coordinates were set. Please set
+                coordinates from address again (or enable Advanced and enter
+                coordinates manually).
               </Text>
             </>
           ) : null}
@@ -483,7 +528,9 @@ export default function EventLocationEditScreen() {
           {showAdvanced ? (
             <>
               <View style={{ height: 10 }} />
-              <Text style={[styles.label, { color: UI.textMuted }]}>Latitude</Text>
+              <Text style={[styles.label, { color: UI.textMuted }]}>
+                Latitude
+              </Text>
               <TextInput
                 style={[
                   styles.input,
@@ -508,7 +555,9 @@ export default function EventLocationEditScreen() {
 
               <View style={{ height: 10 }} />
 
-              <Text style={[styles.label, { color: UI.textMuted }]}>Longitude</Text>
+              <Text style={[styles.label, { color: UI.textMuted }]}>
+                Longitude
+              </Text>
               <TextInput
                 style={[
                   styles.input,
@@ -533,7 +582,8 @@ export default function EventLocationEditScreen() {
 
               <View style={{ height: 10 }} />
               <Text style={[styles.subtle, { color: UI.textMuted }]}>
-                Editing coordinates manually will override the address-based coordinates for this event.
+                Editing coordinates manually will override the address-based
+                coordinates for this event.
               </Text>
             </>
           ) : null}
@@ -552,7 +602,11 @@ export default function EventLocationEditScreen() {
           </View>
           <View style={{ width: 12 }} />
           <View style={{ flex: 1 }}>
-            <Button title={saving ? "Saving…" : "Save"} onPress={onSave} disabled={saving} />
+            <Button
+              title={saving ? "Saving…" : "Save"}
+              onPress={onSave}
+              disabled={saving}
+            />
           </View>
         </View>
       </ScrollView>
@@ -578,10 +632,6 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "700",
   },
-  subtitle: {
-    fontSize: 14,
-    marginTop: -6,
-  },
   label: {
     marginBottom: 6,
     fontSize: 13,
@@ -602,6 +652,10 @@ const styles = StyleSheet.create({
   subtle: {
     fontSize: 13,
     textAlign: "center",
+  },
+  subtleLeft: {
+    fontSize: 13,
+    textAlign: "left",
   },
   warn: {
     fontSize: 13,

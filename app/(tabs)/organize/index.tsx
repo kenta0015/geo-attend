@@ -274,6 +274,7 @@ export default function OrganizeIndexScreen() {
   const role: Role = useEffectiveRole();
 
   const scrollRef = useRef<ScrollView | null>(null);
+  const createInFlightRef = useRef(false);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1139,6 +1140,9 @@ export default function OrganizeIndexScreen() {
   ]);
 
   const createEvent = useCallback(async () => {
+    if (createInFlightRef.current) return;
+    if (submitting) return;
+
     setSubmitError(null);
 
     const errs: FormErrors = {};
@@ -1201,6 +1205,9 @@ export default function OrganizeIndexScreen() {
       return;
     }
 
+    createInFlightRef.current = true;
+    setSubmitting(true);
+
     const latTrim = lat.trim();
     const lngTrim = lng.trim();
 
@@ -1213,7 +1220,6 @@ export default function OrganizeIndexScreen() {
       Number.isFinite(parsedLng) &&
       isValidLatLngRange(parsedLat, parsedLng);
 
-    setSubmitting(true);
     try {
       let finalLatN: number | null = null;
       let finalLngN: number | null = null;
@@ -1327,10 +1333,24 @@ export default function OrganizeIndexScreen() {
       setTitle("");
       setVenueName("");
       setAddressText("");
+
+      setLat("");
+      setLng("");
+      setCoordsManual(false);
+      setCoordsAddressSnapshot(null);
+
+      setShowAdvancedLocation(false);
+
+      setPlaceQuery("");
+      setPlaceResults([]);
+      setPlaceError(null);
+      setPlaceSearched(false);
+
       await fetchEventsForGroup(groupId);
     } catch (e: any) {
       setSubmitError(e?.message ?? "Failed to create event");
     } finally {
+      createInFlightRef.current = false;
       setSubmitting(false);
       setAddrGeocoding(false);
     }
@@ -1345,14 +1365,13 @@ export default function OrganizeIndexScreen() {
     formErrors.address,
     formErrors.coords,
     groupId,
-    lat,
-    lng,
     radiusM,
     runCreateLocationSafetyCheck,
     scrollToField,
     setErrorsAndScroll,
     showSafetyBlockAlert,
     startUtc,
+    submitting,
     title,
     validateIso,
     venueName,
@@ -2239,4 +2258,3 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 });
-
