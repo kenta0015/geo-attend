@@ -19,11 +19,7 @@ import { supabase } from "../../../../../lib/supabase";
 import { haversineMeters, accuracyThreshold } from "../../../../../lib/geo";
 import { getGuestId } from "../../../../../stores/session";
 import { useEffectiveRole } from "../../../../../stores/devRole";
-import {
-  armGeofenceAt,
-  disarmGeofence,
-  geofenceStatus,
-} from "../../../../../lib/geofenceActions";
+import { armGeofenceAt, disarmGeofence, geofenceStatus } from "../../../../../lib/geofenceActions";
 
 type EventRow = {
   id: string;
@@ -180,23 +176,27 @@ export default function OrganizeEventDetail() {
   }, [pathname, eid]);
 
   const role = useEffectiveRole();
+  const showDev = __DEV__;
 
   // === Proof log preview ======================================================
   const [proofLastLine, setProofLastLine] = useState<string>("—");
   const [proofCount, setProofCount] = useState<number>(0);
 
   const refreshProofPreview = useCallback(async () => {
+    if (!showDev) return;
     const entries = await readProofLog();
     setProofCount(entries.length);
     const last = entries.length > 0 ? entries[entries.length - 1] : null;
     setProofLastLine(last ? formatProofLine(last) : "—");
-  }, []);
+  }, [showDev]);
 
   useEffect(() => {
+    if (!showDev) return;
     refreshProofPreview();
-  }, [refreshProofPreview]);
+  }, [refreshProofPreview, showDev]);
 
   const showProofLog = useCallback(async () => {
+    if (!showDev) return;
     const entries = await readProofLog();
     setProofCount(entries.length);
     if (!entries.length) {
@@ -206,9 +206,10 @@ export default function OrganizeEventDetail() {
     const lastN = entries.slice(Math.max(0, entries.length - 12));
     const text = lastN.map(formatProofLine).join("\n");
     Alert.alert("Proof log (last entries)", text);
-  }, []);
+  }, [showDev]);
 
   const handleClearProofLog = useCallback(() => {
+    if (!showDev) return;
     Alert.alert("Clear proof log", "This will remove local proof logs on this device.", [
       { text: "Cancel", style: "cancel" },
       {
@@ -221,7 +222,7 @@ export default function OrganizeEventDetail() {
         },
       },
     ]);
-  }, [refreshProofPreview]);
+  }, [refreshProofPreview, showDev]);
 
   // === Event load ============================================================
   const [loading, setLoading] = useState(true);
@@ -457,7 +458,7 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: baseMeta,
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
       Alert.alert("Not allowed", "Only organizers can start attendee check.");
       return;
     }
@@ -474,7 +475,7 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: baseMeta,
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
       Alert.alert("Not supported", "Live attendee check is not supported on web.");
       return;
     }
@@ -506,7 +507,7 @@ export default function OrganizeEventDetail() {
           end_utc: eventRow.end_utc,
         },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
 
       const startText = eventRow.start_utc ? new Date(eventRow.start_utc).toUTCString() : "—";
       const endText = eventRow.end_utc ? new Date(eventRow.end_utc).toUTCString() : "—";
@@ -531,7 +532,7 @@ export default function OrganizeEventDetail() {
           platform: Platform.OS,
           meta: baseMeta,
         });
-        await refreshProofPreview();
+        if (showDev) await refreshProofPreview();
 
         router.push({
           pathname: "/location-disclosure",
@@ -550,7 +551,7 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: { ...baseMeta, message: e?.message },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
     }
 
     try {
@@ -573,7 +574,7 @@ export default function OrganizeEventDetail() {
           platform: Platform.OS,
           meta: { ...baseMeta, message: e?.message },
         });
-        await refreshProofPreview();
+        if (showDev) await refreshProofPreview();
         Alert.alert("Permission check failed", "Unable to read location permission status.");
         return;
       }
@@ -592,7 +593,7 @@ export default function OrganizeEventDetail() {
           platform: Platform.OS,
           meta: { ...baseMeta, message: e?.message },
         });
-        await refreshProofPreview();
+        if (showDev) await refreshProofPreview();
         Alert.alert("Permission check failed", "Unable to read background location permission status.");
         return;
       }
@@ -620,7 +621,7 @@ export default function OrganizeEventDetail() {
             bg: { status: bg?.status, granted: bg?.granted, canAskAgain: bg?.canAskAgain },
           },
         });
-        await refreshProofPreview();
+        if (showDev) await refreshProofPreview();
 
         Alert.alert(
           "Always location required",
@@ -652,7 +653,7 @@ export default function OrganizeEventDetail() {
           platform: Platform.OS,
           meta: { ...baseMeta, lat, lng },
         });
-        await refreshProofPreview();
+        if (showDev) await refreshProofPreview();
 
         Alert.alert("Missing location", "This event does not have a valid venue location.");
         return;
@@ -688,7 +689,7 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: { ...baseMeta, lat, lng, radius },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
 
       Alert.alert("Attendee check started", "This device will automatically log arrivals and exits.");
     } catch (e: any) {
@@ -702,12 +703,12 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: { ...baseMeta, message: e?.message },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
       Alert.alert("Failed to start", e?.message ?? "Unable to start attendee check.");
     } finally {
       setAttendeeStartBusy(false);
     }
-  }, [eid, eventRow, refreshAttendeeCheckStatus, refreshProofPreview, role]);
+  }, [eid, eventRow, refreshAttendeeCheckStatus, refreshProofPreview, role, showDev]);
 
   const handleStopAttendeeCheck = useCallback(async () => {
     const evId = eventRow?.id ?? null;
@@ -723,7 +724,7 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: { event_id: evId, role, platform: Platform.OS, route_id: eid },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
       Alert.alert("Not allowed", "Only organizers can stop attendee check.");
       return;
     }
@@ -743,7 +744,7 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: { event_id: evId, role, platform: Platform.OS, route_id: eid },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
 
       Alert.alert("Attendee check stopped");
     } catch (e: any) {
@@ -757,13 +758,13 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: { event_id: evId, role, platform: Platform.OS, route_id: eid, message: e?.message },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
 
       Alert.alert("Failed to stop", e?.message ?? "Unable to stop attendee check.");
     } finally {
       setAttendeeStopBusy(false);
     }
-  }, [eid, eventRow, refreshAttendeeCheckStatus, refreshProofPreview, role]);
+  }, [eid, eventRow, refreshAttendeeCheckStatus, refreshProofPreview, role, showDev]);
 
   const handleShowAttendeeStatus = useCallback(async () => {
     await refreshAttendeeCheckStatus();
@@ -780,7 +781,7 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: { event_id: eventRow?.id ?? null, role, platform: Platform.OS, started },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
     } catch (e: any) {
       await appendProofLog({
         at: safeIsoNow(),
@@ -792,11 +793,11 @@ export default function OrganizeEventDetail() {
         platform: Platform.OS,
         meta: { event_id: eventRow?.id ?? null, role, platform: Platform.OS, message: e?.message },
       });
-      await refreshProofPreview();
+      if (showDev) await refreshProofPreview();
     }
 
     Alert.alert("Attendee check", attendeeCheckStatus);
-  }, [attendeeCheckStatus, eventRow, refreshAttendeeCheckStatus, refreshProofPreview, role]);
+  }, [attendeeCheckStatus, eventRow, refreshAttendeeCheckStatus, refreshProofPreview, role, showDev]);
 
   // === Delete event (Organizer) ==============================================
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -834,7 +835,6 @@ export default function OrganizeEventDetail() {
     );
   }, [eventRow]);
 
-  // === Render guards =========================================================
   if (!eid) {
     return (
       <View style={[styles.container, { justifyContent: "center", alignItems: "center" }]}>
@@ -860,7 +860,6 @@ export default function OrganizeEventDetail() {
     );
   }
 
-  // === UI ====================================================================
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
       <Text style={styles.h1}>{eventRow.title ?? "Event"}</Text>
@@ -907,7 +906,7 @@ export default function OrganizeEventDetail() {
             </TouchableOpacity>
           </View>
 
-          {Platform.OS !== "web" ? (
+          {showDev && Platform.OS !== "web" ? (
             <View style={styles.devPanel}>
               <Text style={styles.devTitle}>DEV — Metrics</Text>
               <Row label="Accuracy" value={devAcc == null ? "—" : `${Math.round(devAcc)}m`} />
@@ -1001,31 +1000,33 @@ export default function OrganizeEventDetail() {
             <Text style={styles.btnOutlineText}>CHECK STATUS</Text>
           </TouchableOpacity>
 
-          <View style={styles.proofPanel}>
-            <Text style={styles.proofTitle}>PROOF LOG</Text>
-            <Row label="Entries" value={String(proofCount)} />
-            <Text style={styles.proofMono} numberOfLines={3}>
-              {proofLastLine}
-            </Text>
+          {showDev ? (
+            <View style={styles.proofPanel}>
+              <Text style={styles.proofTitle}>PROOF LOG MARKER</Text>
+              <Row label="Entries" value={String(proofCount)} />
+              <Text style={styles.proofMono} numberOfLines={3}>
+                {proofLastLine}
+              </Text>
 
-            <View style={{ height: 8 }} />
-            <TouchableOpacity
-              style={[styles.btnOutline]}
-              onPress={showProofLog}
-              disabled={deleteBusy}
-            >
-              <Text style={styles.btnOutlineText}>VIEW PROOF LOG</Text>
-            </TouchableOpacity>
+              <View style={{ height: 8 }} />
+              <TouchableOpacity
+                style={[styles.btnOutline]}
+                onPress={showProofLog}
+                disabled={deleteBusy}
+              >
+                <Text style={styles.btnOutlineText}>VIEW PROOF LOG</Text>
+              </TouchableOpacity>
 
-            <View style={{ height: 8 }} />
-            <TouchableOpacity
-              style={[styles.btnOutline]}
-              onPress={handleClearProofLog}
-              disabled={deleteBusy}
-            >
-              <Text style={styles.btnOutlineText}>CLEAR PROOF LOG</Text>
-            </TouchableOpacity>
-          </View>
+              <View style={{ height: 8 }} />
+              <TouchableOpacity
+                style={[styles.btnOutline]}
+                onPress={handleClearProofLog}
+                disabled={deleteBusy}
+              >
+                <Text style={styles.btnOutlineText}>CLEAR PROOF LOG</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
 
           <View style={{ height: 16 }} />
           <TouchableOpacity

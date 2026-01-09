@@ -26,11 +26,9 @@ function parseToken(raw?: string | null): TokenParts | null {
 
 async function waitForSessionUserId(timeoutMs = 5000, stepMs = 200): Promise<string | null> {
   const started = Date.now();
-  // check once
   const first = await supabase.auth.getSession();
   if (first.data.session?.user?.id) return first.data.session.user.id;
 
-  // subscribe and poll lightly
   return await new Promise<string | null>((resolve) => {
     let resolved = false;
 
@@ -66,7 +64,6 @@ async function waitForSessionUserId(timeoutMs = 5000, stepMs = 200): Promise<str
 }
 
 async function rebuildIfDevUser(parts: TokenParts, sessionUserId: string | null) {
-  // Only rewrite when 3rd field is literally "DEV"
   if (parts.userId !== "DEV") {
     return {
       token: `v1|${parts.eventId}|${parts.userId}|${parts.slot}|${parts.hash}`,
@@ -75,14 +72,12 @@ async function rebuildIfDevUser(parts: TokenParts, sessionUserId: string | null)
     };
   }
 
-  // wait a bit for session if needed
   const uid = sessionUserId ?? (await waitForSessionUserId());
   if (!uid) throw new Error("Not signed in. Please sign in first to use DEV token.");
 
   const secret = process.env.EXPO_PUBLIC_QR_SECRET ?? "";
   if (!secret) throw new Error("Missing EXPO_PUBLIC_QR_SECRET in .env");
 
-  // signature := sha256("eventId|userId|slot|secret")
   const payload = `${parts.eventId}|${uid}|${parts.slot}|${secret}`;
   const digest = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, payload);
   const token = `v1|${parts.eventId}|${uid}|${parts.slot}|${digest}`;
@@ -99,7 +94,8 @@ export default function JoinScreen() {
   const [loading, setLoading] = useState(false);
   const [didAutoNav, setDidAutoNav] = useState(false);
 
-  // Load session + subscribe auth state
+  const showDev = __DEV__;
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -115,7 +111,6 @@ export default function JoinScreen() {
     };
   }, []);
 
-  // --- core join with token (supports DEV placeholder) ---
   const tokenInUrl = useMemo(() => (params?.token ? String(params.token) : null), [params?.token]);
 
   async function processJoinWithToken(source: "url" | "input", raw?: string) {
@@ -130,7 +125,6 @@ export default function JoinScreen() {
 
       const { token, usedUserId, rewritten } = await rebuildIfDevUser(parts, sessionUserId);
 
-      // Optional: server-side RPC
       try {
         const { error } = await supabase.rpc("join_with_token", { p_token: token });
         if (error) throw error;
@@ -146,7 +140,6 @@ export default function JoinScreen() {
         `${rewritten ? "DEV token rewritten" : "Token accepted"}\nuserId=${usedUserId.slice(0, 8)}…`
       );
 
-      // ✅ Always navigate to the (tabs) variant so the Attendee scan button is present
       router.replace({
         pathname: "/(tabs)/organize/events/[id]",
         params: { id: parts.eventId },
@@ -158,7 +151,6 @@ export default function JoinScreen() {
     }
   }
 
-  // Auto-handle when opened via rta://join?token=...
   useEffect(() => {
     if (tokenInUrl) {
       processJoinWithToken("url").catch(() => {});
@@ -166,7 +158,6 @@ export default function JoinScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenInUrl]);
 
-  // --- auth helpers ---
   async function signIn() {
     if (!email || !password) return Alert.alert("Sign in", "Email and password are required.");
     setLoading(true);
@@ -174,7 +165,6 @@ export default function JoinScreen() {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       Alert.alert("Signed in", "You are now signed in.");
-      // Navigate after successful sign-in (no token join)
       if (!tokenInUrl) {
         router.replace(AFTER_LOGIN_PATH);
       }
@@ -233,7 +223,6 @@ export default function JoinScreen() {
     processJoinWithToken("url");
   }
 
-  // Auto-redirect if already signed in (and not handling token join)
   useEffect(() => {
     if (!didAutoNav && sessionUserId && !tokenInUrl) {
       setDidAutoNav(true);
@@ -275,28 +264,42 @@ export default function JoinScreen() {
         <Button title="Send Magic Link" onPress={magicLink} disabled={loading} />
       </View>
 
-      <View style={[styles.row, { marginTop: 16 }]}>
-        <Text style={styles.label}>Session</Text>
-        <Text style={styles.value}>{sessionUserId ? sessionUserId : "Not signed in"}</Text>
-      </View>
+      {showDev ? (
+        <>
+          <View style={[styles.row, { marginTop: 16 }]}>
+            <Text style={styles.label}>Session</Text>
+            <Text style={styles.value}>{sessionUserId ? sessionUserId : "Not signed in"}</Text>
+          </View>
 
-      <View style={styles.buttons}>
-        <Button title="Sign Out" onPress={signOut} disabled={loading} />
-        <Button title="Open Location Test" onPress={() => router.push("/organize/location-test")} />
-      </View>
+          <View style={styles.buttons}>
+            <Button title="Sign Out" onPress={signOut} disabled={loading} />
+            <Button title="Open Location Test" onPress={() => router.push("/organize/location-test")} />
+          </View>
 
-      <View style={[styles.sep]} />
+          <View style={styles.sep} />
 
-      <Text style={styles.subtitle}>Join via Token</Text>
-      <View style={styles.buttons}>
-        <Button title={loading ? "Processing..." : "Join with token"} onPress={joinWithToken} disabled={loading} />
-      </View>
+          <Text style={styles.subtitle}>Join via Token</Text>
+          <View style={styles.buttons}>
+            <Button
+              title={loading ? "Processing..." : "Join with token"}
+              onPress={joinWithToken}
+              disabled={loading}
+            />
+          </View>
 
-      <Text style={styles.note}>• Token URL param is auto-processed when opening rta://join?token=...</Text>
-      <Text style={styles.note}>• eventId-style deep links are also supported: rta://join?eventId=...</Text>
-      <Text style={styles.note}>• DEV token is supported: it will be rewritten with your signed-in userId and re-signed.</Text>
-      <Text style={styles.note}>• Make sure EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY / EXPO_PUBLIC_QR_SECRET are set.</Text>
-      <Text style={styles.note}>• On Android, prefer a Dev Client build for background geofencing and local notifications.</Text>
+          <Text style={styles.note}>• Token URL param is auto-processed when opening rta://join?token=...</Text>
+          <Text style={styles.note}>• eventId-style deep links are also supported: rta://join?eventId=...</Text>
+          <Text style={styles.note}>
+            • DEV token is supported: it will be rewritten with your signed-in userId and re-signed.
+          </Text>
+          <Text style={styles.note}>
+            • Make sure EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY / EXPO_PUBLIC_QR_SECRET are set.
+          </Text>
+          <Text style={styles.note}>
+            • On Android, prefer a Dev Client build for background geofencing and local notifications.
+          </Text>
+        </>
+      ) : null}
     </View>
   );
 }

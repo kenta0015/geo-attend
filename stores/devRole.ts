@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { DeviceEventEmitter } from "react-native";
+import Constants from "expo-constants";
 
 export type Role = "attendee" | "organizer";
 
@@ -17,8 +18,37 @@ const STORAGE_KEY = "@dev.roleOverride";
 const LEGACY_ROLE_KEY = "rta_dev_role";
 const ROLE_EVENT = "rta_role_changed";
 
+type AppEnv = "production" | "internal" | "development" | "staging" | "preview" | string;
+
+function getAppEnv(): AppEnv {
+  try {
+    const anyConstants: any = Constants as any;
+
+    const fromExpoConfig: any = anyConstants?.expoConfig;
+    const fromManifest: any = anyConstants?.manifest;
+    const fromManifest2: any = anyConstants?.manifest2;
+
+    const env =
+      fromExpoConfig?.extra?.appEnv ??
+      fromManifest?.extra?.appEnv ??
+      fromManifest2?.extra?.appEnv ??
+      undefined;
+
+    if (typeof env === "string" && env.trim().length > 0) return env.trim();
+  } catch {
+    // ignore
+  }
+
+  // Safe default: treat unknown as internal/non-production.
+  return "internal";
+}
+
 // Single place to toggle dev override behavior.
+// Hard safety rule: NEVER enable dev UI in production builds.
 export function devSwitchEnabled(): boolean {
+  const appEnv = getAppEnv();
+  if (appEnv === "production") return false;
+
   const isDev = typeof __DEV__ !== "undefined" && __DEV__;
 
   const envEnabled =

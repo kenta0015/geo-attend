@@ -16,7 +16,8 @@
       "env": { "APP_ENV": "internal" },
       "channel": "internal",
       "developmentClient": false,
-      "distribution": "internal"
+      "distribution": "internal",
+      "autoIncrement": true
     },
     "production": {
       "android": { "buildType": "app-bundle" },
@@ -47,4 +48,3 @@
     }
   }
 }
-

@@ -1,8 +1,8 @@
+// /Users/ken/app_development/rta-zero_restored/app/(tabs)/organize/index.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
-  StyleSheet,
   TextInput,
   TouchableOpacity,
   FlatList,
@@ -22,6 +22,8 @@ import { useRouter, useLocalSearchParams } from "expo-router";
 import { supabase } from "../../../lib/supabase";
 import { getGuestId } from "../../../stores/session";
 import { useEffectiveRole, type Role } from "../../../stores/devRole";
+import { runCreateLocationSafetyCheck, type CreateSafetyDecision } from "./organizeSafety";
+import { styles } from "./styles";
 
 type GroupRow = { id: string; name: string | null; description?: string | null };
 type MembershipRow = { group_id: string };
@@ -63,42 +65,14 @@ const nowIso = () => new Date().toISOString();
 const plusHoursIso = (h: number) => new Date(Date.now() + h * 3600_000).toISOString();
 
 const PLACE_LOG_PREFIX = "[organize][place]";
-const SAFETY_LOG_PREFIX = "[organize][safety]";
 
 const AU_STATE_CODES = ["VIC", "NSW", "QLD", "SA", "WA", "TAS", "ACT", "NT"] as const;
 const AU_STATE_REGEX = new RegExp(`\\b(?:${AU_STATE_CODES.join("|")})\\b`, "i");
 const AU_POSTCODE_REGEX = /\b\d{4}\b/g;
 
-const AMBIGUOUS_WARN_M = 5_000;
-const AMBIGUOUS_STRONG_WARN_M = 50_000;
-const CAPITAL_HINT_WARN_M = 80_000;
-const CAPITAL_HINT_STRONG_WARN_M = 250_000;
-
 const RADIUS_PRESETS_M = [50, 100, 200, 300] as const;
 const RADIUS_MIN_M = 10;
 const RADIUS_MAX_M = 1000;
-
-const CAPITAL_HINTS: Array<{ name: string; lat: number; lng: number }> = [
-  { name: "Melbourne", lat: MELBOURNE_CBD.lat, lng: MELBOURNE_CBD.lng },
-  { name: "Sydney", lat: -33.8688, lng: 151.2093 },
-  { name: "Brisbane", lat: -27.4698, lng: 153.0251 },
-  { name: "Adelaide", lat: -34.9285, lng: 138.6007 },
-  { name: "Perth", lat: -31.9523, lng: 115.8613 },
-  { name: "Hobart", lat: -42.8821, lng: 147.3272 },
-  { name: "Canberra", lat: -35.2809, lng: 149.13 },
-  { name: "Darwin", lat: -12.4634, lng: 130.8456 },
-];
-
-const AU_STATE_NAME_TO_CODE: Record<string, (typeof AU_STATE_CODES)[number]> = {
-  VICTORIA: "VIC",
-  "NEW SOUTH WALES": "NSW",
-  QUEENSLAND: "QLD",
-  "SOUTH AUSTRALIA": "SA",
-  "WESTERN AUSTRALIA": "WA",
-  TASMANIA: "TAS",
-  "AUSTRALIAN CAPITAL TERRITORY": "ACT",
-  "NORTHERN TERRITORY": "NT",
-};
 
 async function getEffectiveUserId(): Promise<string> {
   try {
@@ -206,65 +180,6 @@ function buildFullAddressAlertBody(missing: string[]): string {
   lines.push("Example: 211 La Trobe St, Melbourne VIC 3000");
   return lines.join("\n");
 }
-
-function extractAddressStateCodeAU(address: string): (typeof AU_STATE_CODES)[number] | null {
-  const m = address.match(AU_STATE_REGEX);
-  if (!m) return null;
-  const code = String(m[0] ?? "").trim().toUpperCase();
-  return (AU_STATE_CODES as readonly string[]).includes(code) ? (code as any) : null;
-}
-
-function extractAddressPostcodeAU(address: string): string | null {
-  const all = Array.from(address.matchAll(AU_POSTCODE_REGEX)).map((m) => m[0]);
-  return all.length > 0 ? all[all.length - 1] : null;
-}
-
-function normalizeReverseStateCode(regionLike: unknown): (typeof AU_STATE_CODES)[number] | null {
-  const raw = String(regionLike ?? "").trim();
-  if (!raw) return null;
-
-  const up = raw.toUpperCase();
-
-  if ((AU_STATE_CODES as readonly string[]).includes(up)) return up as any;
-
-  const compact = up.replace(/\s+/g, " ").trim();
-  if (AU_STATE_NAME_TO_CODE[compact]) return AU_STATE_NAME_TO_CODE[compact];
-
-  const head = compact.split(",")[0]?.trim() ?? "";
-  if (AU_STATE_NAME_TO_CODE[head]) return AU_STATE_NAME_TO_CODE[head];
-
-  return null;
-}
-
-function extractReversePostcodeAU(postalCodeLike: unknown): string | null {
-  const raw = String(postalCodeLike ?? "").trim();
-  if (!raw) return null;
-  const m = raw.match(/\b\d{4}\b/);
-  return m ? m[0] : null;
-}
-
-function detectCapitalHint(address: string): { name: string; lat: number; lng: number } | null {
-  const a = address.trim().toLowerCase();
-  if (!a) return null;
-  for (const c of CAPITAL_HINTS) {
-    if (a.includes(c.name.toLowerCase())) return c;
-  }
-  return null;
-}
-
-function formatDistance(meters: number): string {
-  if (!Number.isFinite(meters)) return "-";
-  if (meters < 1000) return `${Math.round(meters)} m`;
-  const km = meters / 1000;
-  if (km < 10) return `${km.toFixed(2)} km`;
-  if (km < 100) return `${km.toFixed(1)} km`;
-  return `${Math.round(km)} km`;
-}
-
-type CreateSafetyDecision =
-  | { kind: "ok"; reasonCodes: string[]; debug: any }
-  | { kind: "warn"; title: string; message: string; reasonCodes: string[]; debug: any }
-  | { kind: "block"; title: string; message: string; reasonCodes: string[]; debug: any };
 
 export default function OrganizeIndexScreen() {
   const router = useRouter();
@@ -680,11 +595,10 @@ export default function OrganizeIndexScreen() {
       setPlaceError(null);
       notify("Coordinates set from quick search. Please paste the full address from Google Maps into Venue address.");
     },
-    [clearFieldError, formErrors.coords, notify, venueName]
+    [clearFieldError, formErrors.coords, venueName]
   );
 
   const openManageGroups = useCallback(() => setManageOpen(true), []);
-
   const closeManageGroups = useCallback(() => setManageOpen(false), []);
 
   const openGroup = useCallback(
@@ -730,7 +644,7 @@ export default function OrganizeIndexScreen() {
 
     notify("Start updated (End auto-set to +60 minutes).");
     closeStartPicker();
-  }, [clearFieldError, closeStartPicker, formErrors.end, formErrors.start, notify, tempStartLocal]);
+  }, [clearFieldError, closeStartPicker, formErrors.end, formErrors.start, tempStartLocal]);
 
   const openStartPickerAndroid = useCallback(() => {
     const initial = safeParseIso(startUtc);
@@ -774,7 +688,7 @@ export default function OrganizeIndexScreen() {
         });
       },
     });
-  }, [clearFieldError, formErrors.end, formErrors.start, notify, startUtc]);
+  }, [clearFieldError, formErrors.end, formErrors.start, startUtc]);
 
   const openStartPicker = useCallback(() => {
     if (Platform.OS === "android") openStartPickerAndroid();
@@ -843,235 +757,6 @@ export default function OrganizeIndexScreen() {
     [openGoogleMapsSearch]
   );
 
-  const runCreateLocationSafetyCheck = useCallback(
-    async (
-      address: string,
-      resolvedLat: number,
-      resolvedLng: number,
-      geocodeRawHint: Location.LocationGeocodedLocation[] | null
-    ): Promise<CreateSafetyDecision> => {
-      const reasonCodes: string[] = [];
-      const debug: any = {
-        address,
-        resolvedLat,
-        resolvedLng,
-      };
-
-      const addrState = extractAddressStateCodeAU(address);
-      const addrPostcode = extractAddressPostcodeAU(address);
-
-      debug.addrState = addrState;
-      debug.addrPostcode = addrPostcode;
-
-      let capitalHintName: string | null = null;
-      let capitalDistanceM: number | null = null;
-
-      const cap = detectCapitalHint(address);
-      if (cap) {
-        capitalHintName = cap.name;
-        capitalDistanceM = distanceMetersHaversine(cap.lat, cap.lng, resolvedLat, resolvedLng);
-        debug.capitalHint = { name: cap.name, distM: capitalDistanceM };
-        if (capitalDistanceM >= CAPITAL_HINT_STRONG_WARN_M) {
-          reasonCodes.push("TOO_FAR");
-        } else if (capitalDistanceM >= CAPITAL_HINT_WARN_M) {
-          reasonCodes.push("TOO_FAR");
-        }
-      }
-
-      let spreadDistanceM: number | null = null;
-      let spreadUsedCount = 0;
-
-      try {
-        const raw = geocodeRawHint ?? (await Location.geocodeAsync(address));
-        const validInOrder = (raw ?? [])
-          .map((r) => {
-            const latN = typeof (r as any).latitude === "number" ? (r as any).latitude : Number((r as any).latitude);
-            const lngN = typeof (r as any).longitude === "number" ? (r as any).longitude : Number((r as any).longitude);
-            if (!Number.isFinite(latN) || !Number.isFinite(lngN)) return null;
-            if (!isValidLatLngRange(latN, lngN)) return null;
-            return { lat: latN, lng: lngN };
-          })
-          .filter((x): x is { lat: number; lng: number } => !!x);
-
-        spreadUsedCount = validInOrder.length;
-
-        if (validInOrder.length >= 3) {
-          spreadDistanceM = distanceMetersHaversine(
-            validInOrder[0].lat,
-            validInOrder[0].lng,
-            validInOrder[2].lat,
-            validInOrder[2].lng
-          );
-          debug.candidateSpread = {
-            usedCount: validInOrder.length,
-            d13m: spreadDistanceM,
-            top3: validInOrder.slice(0, 3).map((v) => ({
-              lat: Number(v.lat.toFixed(6)),
-              lng: Number(v.lng.toFixed(6)),
-            })),
-          };
-
-          if (spreadDistanceM >= AMBIGUOUS_STRONG_WARN_M) {
-            reasonCodes.push("AMBIGUOUS");
-          } else if (spreadDistanceM >= AMBIGUOUS_WARN_M) {
-            reasonCodes.push("AMBIGUOUS");
-          }
-        } else {
-          debug.candidateSpread = { usedCount: validInOrder.length };
-        }
-      } catch (e: any) {
-        debug.candidateSpreadError = e?.message ?? String(e);
-      }
-
-      let reverse: Location.LocationGeocodedAddress | null = null;
-      let reverseError: string | null = null;
-
-      try {
-        const rev = await Location.reverseGeocodeAsync({ latitude: resolvedLat, longitude: resolvedLng });
-        reverse = (rev?.[0] as any) ?? null;
-      } catch (e: any) {
-        reverseError = e?.message ?? String(e);
-      }
-
-      if (!reverse) {
-        reasonCodes.push("REVERSE_UNAVAILABLE");
-        debug.reverse = null;
-        debug.reverseError = reverseError ?? "No reverse results";
-      } else {
-        const isoCountry = String((reverse as any)?.isoCountryCode ?? "").trim().toUpperCase();
-        const country = String((reverse as any)?.country ?? "").trim();
-        const region = String((reverse as any)?.region ?? (reverse as any)?.subregion ?? "").trim();
-        const postalCode = String((reverse as any)?.postalCode ?? "").trim();
-        const city = String((reverse as any)?.city ?? (reverse as any)?.district ?? "").trim();
-        const name = String((reverse as any)?.name ?? "").trim();
-        const street = String((reverse as any)?.street ?? "").trim();
-
-        const revState = normalizeReverseStateCode(region);
-        const revPostcode = extractReversePostcodeAU(postalCode);
-
-        debug.reverse = {
-          isoCountryCode: isoCountry || null,
-          country: country || null,
-          region: region || null,
-          stateCode: revState,
-          postalCode: revPostcode,
-          city: city || null,
-          name: name || null,
-          street: street || null,
-        };
-
-        const countryLooksAU = (() => {
-          if (isoCountry) return isoCountry === "AU";
-          if (!country) return null;
-          return country.toLowerCase().includes("australia");
-        })();
-
-        if (countryLooksAU === false) {
-          reasonCodes.push("COUNTRY_NOT_AU");
-          const lines: string[] = [];
-          lines.push("The resolved location looks outside Australia.");
-          lines.push("");
-          lines.push(`Address: ${address}`);
-          lines.push(`Resolved: ${resolvedLat.toFixed(6)}, ${resolvedLng.toFixed(6)}`);
-          lines.push(`Reverse country: ${isoCountry || country || "(unknown)"}`);
-          lines.push("");
-          lines.push("Please open Google Maps, copy the FULL address, and paste it again.");
-          lines.push("");
-          lines.push("Open Google Maps → select the place → Share → Copy address → paste it here.");
-          const msg = lines.join("\n");
-
-          console.log(`${SAFETY_LOG_PREFIX} block COUNTRY_NOT_AU`, { reasonCodes, debug });
-
-          return { kind: "block", title: "Location mismatch", message: msg, reasonCodes, debug };
-        }
-
-        if (addrState && revState && addrState !== revState) {
-          reasonCodes.push("STATE_MISMATCH");
-          const lines: string[] = [];
-          lines.push("State mismatch between your address and the resolved coordinates.");
-          lines.push("");
-          lines.push(`Address: ${address}`);
-          lines.push(`Address state: ${addrState}`);
-          lines.push(`Reverse state: ${revState}`);
-          lines.push(`Resolved: ${resolvedLat.toFixed(6)}, ${resolvedLng.toFixed(6)}`);
-          lines.push("");
-          lines.push("Please open Google Maps, copy the FULL address, and paste it again.");
-          const msg = lines.join("\n");
-
-          console.log(`${SAFETY_LOG_PREFIX} block STATE_MISMATCH`, { reasonCodes, debug });
-
-          return { kind: "block", title: "Location mismatch", message: msg, reasonCodes, debug };
-        }
-
-        if (addrPostcode && revPostcode && addrPostcode !== revPostcode) {
-          reasonCodes.push("POSTCODE_MISMATCH");
-          const lines: string[] = [];
-          lines.push("Postcode mismatch between your address and the resolved coordinates.");
-          lines.push("");
-          lines.push(`Address: ${address}`);
-          lines.push(`Address postcode: ${addrPostcode}`);
-          lines.push(`Reverse postcode: ${revPostcode}`);
-          lines.push(`Resolved: ${resolvedLat.toFixed(6)}, ${resolvedLng.toFixed(6)}`);
-          lines.push("");
-          lines.push("Please open Google Maps, copy the FULL address, and paste it again.");
-          const msg = lines.join("\n");
-
-          console.log(`${SAFETY_LOG_PREFIX} block POSTCODE_MISMATCH`, { reasonCodes, debug });
-
-          return { kind: "block", title: "Location mismatch", message: msg, reasonCodes, debug };
-        }
-      }
-
-      const uniqueReasons = Array.from(new Set(reasonCodes));
-      debug.reasonCodes = uniqueReasons;
-
-      const shouldWarn = uniqueReasons.some((r) => r === "REVERSE_UNAVAILABLE" || r === "AMBIGUOUS" || r === "TOO_FAR");
-      if (!shouldWarn) {
-        console.log(`${SAFETY_LOG_PREFIX} ok`, { reasonCodes: uniqueReasons, debug });
-        return { kind: "ok", reasonCodes: uniqueReasons, debug };
-      }
-
-      const lines: string[] = [];
-      const hasStrongAmbiguous = spreadDistanceM !== null && spreadDistanceM >= AMBIGUOUS_STRONG_WARN_M;
-      const hasStrongFar = capitalDistanceM !== null && capitalDistanceM >= CAPITAL_HINT_STRONG_WARN_M;
-
-      const warnTitle = hasStrongAmbiguous || hasStrongFar ? "Verify location (important)" : "Verify location";
-      lines.push("Please verify the resolved location before creating this event.");
-      lines.push("");
-      lines.push(`Address: ${address}`);
-      lines.push(`Resolved: ${resolvedLat.toFixed(6)}, ${resolvedLng.toFixed(6)}`);
-
-      if (capitalHintName && capitalDistanceM !== null) {
-        lines.push(`Distance to ${capitalHintName}: ${formatDistance(capitalDistanceM)}`);
-      }
-
-      if (spreadDistanceM !== null) {
-        lines.push(`Geocode candidate spread (1st↔3rd): ${formatDistance(spreadDistanceM)}`);
-        lines.push(`Candidates used: ${spreadUsedCount}`);
-      }
-
-      const rev = debug.reverse as any;
-      if (rev && typeof rev === "object") {
-        const ctry = rev.isoCountryCode || rev.country || "(unknown)";
-        const st = rev.stateCode || rev.region || "(unknown)";
-        const pc = rev.postalCode || "(unknown)";
-        lines.push(`Reverse: ${ctry}, ${st} ${pc}`);
-      } else {
-        lines.push("Reverse: unavailable (cannot validate state/postcode)");
-      }
-
-      lines.push("");
-      lines.push(`Reason codes: ${uniqueReasons.join(", ")}`);
-
-      const msg = lines.join("\n");
-
-      console.log(`${SAFETY_LOG_PREFIX} warn`, { reasonCodes: uniqueReasons, debug });
-
-      return { kind: "warn", title: warnTitle, message: msg, reasonCodes: uniqueReasons, debug };
-    },
-    []
-  );
-
   const setCoordsFromAddress = useCallback(async () => {
     setSubmitError(null);
 
@@ -1129,15 +814,7 @@ export default function OrganizeIndexScreen() {
     } finally {
       setAddrGeocoding(false);
     }
-  }, [
-    addressText,
-    clearFieldError,
-    formErrors.address,
-    formErrors.coords,
-    notify,
-    scrollToField,
-    setFieldErrorAndScroll,
-  ]);
+  }, [addressText, clearFieldError, formErrors.address, formErrors.coords, scrollToField, setFieldErrorAndScroll]);
 
   const createEvent = useCallback(async () => {
     if (createInFlightRef.current) return;
@@ -1291,7 +968,7 @@ export default function OrganizeIndexScreen() {
       }
 
       if (!coordsManual) {
-        const decision = await runCreateLocationSafetyCheck(address, finalLatN, finalLngN, geocodeRawForSafety);
+        const decision: CreateSafetyDecision = await runCreateLocationSafetyCheck(address, finalLatN, finalLngN, geocodeRawForSafety);
 
         if (decision.kind === "block") {
           setErrorsAndScroll({
@@ -1365,6 +1042,8 @@ export default function OrganizeIndexScreen() {
     formErrors.address,
     formErrors.coords,
     groupId,
+    lat,
+    lng,
     radiusM,
     runCreateLocationSafetyCheck,
     scrollToField,
@@ -1395,8 +1074,6 @@ export default function OrganizeIndexScreen() {
     const lngN = Number(lng);
     return !!lat && !!lng && !Number.isNaN(latN) && !Number.isNaN(lngN) && isValidLatLngRange(latN, lngN);
   }, [lat, lng]);
-
-  const addressTrimmed = useMemo(() => addressText.trim(), [addressText]);
 
   const mapsQuery = useMemo(() => {
     const a = addressText.trim();
@@ -1995,266 +1672,3 @@ export default function OrganizeIndexScreen() {
     </ScrollView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, paddingTop: 16, paddingHorizontal: 16 },
-  header: { fontSize: 22, fontWeight: "700", marginBottom: 12 },
-  bannerError: {
-    backgroundColor: "#FFEAEA",
-    borderColor: "#FF8A8A",
-    borderWidth: 1,
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 12,
-  },
-  bannerText: { color: "#B00020" },
-  card: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 14,
-    backgroundColor: "white",
-  },
-  subCard: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 14,
-    padding: 12,
-    marginTop: 10,
-    backgroundColor: "#FAFAFA",
-  },
-  cardTitle: { fontSize: 16, fontWeight: "700", marginBottom: 8 },
-  label: { fontWeight: "600", marginBottom: 6 },
-  input: {
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    marginBottom: 10,
-    backgroundColor: "white",
-  },
-  inputMono: {
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    marginBottom: 10,
-    backgroundColor: "white",
-    fontFamily: Platform.select({
-      ios: "Menlo",
-      android: "monospace",
-      default: "monospace",
-    }),
-  },
-
-  pickerField: {
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 12,
-    marginBottom: 10,
-    backgroundColor: "white",
-    justifyContent: "center",
-  },
-  pickerText: { color: "#111827" },
-  pickerPlaceholder: { color: "#6B7280" },
-  advancedToggle: { alignSelf: "flex-start", marginBottom: 10, marginTop: -2 },
-  advancedToggleText: { color: "#2563EB", fontWeight: "700" },
-  secondaryToggle: { alignSelf: "flex-start", marginTop: 6 },
-  secondaryToggleText: { color: "#374151", fontWeight: "700" },
-  advancedBlock: { marginTop: 2 },
-
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-  },
-  rowBetween: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: -4,
-    marginBottom: 8,
-  },
-  rowInput: { flex: 1, marginRight: 10 },
-  rowInputNoRight: { flex: 1, marginRight: 0 },
-  btnSmall: {
-    borderWidth: 1,
-    borderColor: "#111827",
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: "white",
-  },
-  btnSmallDisabled: { opacity: 0.4 },
-  btnSmallText: { fontWeight: "800", color: "#111827" },
-  chip: {
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    borderRadius: 999,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    marginRight: 8,
-    backgroundColor: "white",
-  },
-  chipActive: { backgroundColor: "#111827", borderColor: "#111827" },
-  chipText: { color: "#111827", fontWeight: "600" },
-  chipTextActive: { color: "white", fontWeight: "700" },
-  help: { color: "#6B7280" },
-  helpSmall: { color: "#6B7280", marginTop: 6, fontSize: 12 },
-  eventItem: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
-  },
-  eventTitle: { fontWeight: "800", color: "#111827", marginBottom: 4 },
-  eventMeta: { color: "#6B7280", fontSize: 12, marginBottom: 2 },
-  eventLink: { marginTop: 6, color: "#2563EB", fontWeight: "800" },
-  primaryBtn: {
-    backgroundColor: "#111827",
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: "center",
-    marginTop: 2,
-  },
-  primaryBtnDisabled: { opacity: 0.6 },
-  primaryBtnText: { color: "white", fontWeight: "900" },
-  center: { alignItems: "center", justifyContent: "center" },
-
-  presetRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    flexWrap: "wrap",
-    marginTop: -2,
-    marginBottom: 8,
-  },
-  presetChip: {
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    backgroundColor: "white",
-    marginRight: 8,
-    marginBottom: 8,
-  },
-  presetChipActive: { backgroundColor: "#111827", borderColor: "#111827" },
-  presetChipText: { color: "#111827", fontWeight: "800" },
-  presetChipTextActive: { color: "white", fontWeight: "900" },
-
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 2,
-  },
-  searchInput: {
-    flex: 1,
-    marginBottom: 0,
-  },
-  searchBtn: {
-    marginLeft: 10,
-    borderWidth: 1,
-    borderColor: "#111827",
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    backgroundColor: "white",
-    marginBottom: 0,
-    minWidth: 92,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  searchBtnDisabled: { opacity: 0.6 },
-  searchBtnText: { fontWeight: "900", color: "#111827" },
-
-  placeRow: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
-    backgroundColor: "white",
-  },
-  placeTitle: { fontWeight: "900", color: "#111827" },
-  placeSubtitle: { color: "#6B7280", marginTop: 4, fontSize: 12 },
-
-  advancedToggleInline: { paddingVertical: 2, paddingLeft: 8 },
-
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.35)",
-    alignItems: "center",
-    justifyContent: "center",
-    padding: 16,
-  },
-  modalCard: {
-    width: "100%",
-    maxWidth: 520,
-    borderRadius: 14,
-    backgroundColor: "white",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    padding: 14,
-  },
-  pickerModalCard: {
-    width: "100%",
-    maxWidth: 520,
-    borderRadius: 14,
-    backgroundColor: "white",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    padding: 14,
-  },
-  modalTitle: { fontSize: 18, fontWeight: "800", marginBottom: 6, color: "#111827" },
-  modalBody: { color: "#6B7280", lineHeight: 18 },
-
-  modalPrimaryBtn: {
-    backgroundColor: "#111827",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-  },
-  modalPrimaryBtnText: { color: "white", fontWeight: "900" },
-
-  modalBtn: {
-    borderWidth: 1,
-    borderColor: "#D1D5DB",
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    marginRight: 10,
-  },
-  modalBtnText: { color: "#111827", fontWeight: "900" },
-
-  modalFooter: { flexDirection: "row", justifyContent: "flex-end", marginTop: 10 },
-
-  modalRow: {
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    borderRadius: 10,
-    padding: 12,
-    marginBottom: 10,
-  },
-  modalRowTitle: { fontWeight: "900", color: "#111827" },
-  modalRowDesc: { color: "#6B7280", marginTop: 4, fontSize: 12 },
-
-  inlineErrorBlock: {
-    backgroundColor: "#FFEAEA",
-    borderColor: "#FF8A8A",
-    borderWidth: 1,
-    padding: 10,
-    borderRadius: 10,
-    marginBottom: 10,
-  },
-  inlineErrorText: {
-    color: "#B00020",
-    fontWeight: "700",
-    marginTop: -2,
-    marginBottom: 10,
-  },
-});
