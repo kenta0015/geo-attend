@@ -1,4 +1,3 @@
-// /Users/ken/app_development/rta-zero_restored/app/(tabs)/organize/index.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -233,6 +232,10 @@ export default function OrganizeIndexScreen() {
   const [startPickerOpen, setStartPickerOpen] = useState(false);
   const [startPickerStep, setStartPickerStep] = useState<"date" | "time">("date");
   const [tempStartLocal, setTempStartLocal] = useState<Date>(() => safeParseIso(nowIso()));
+
+  const [howToOpen, setHowToOpen] = useState(false);
+  const openHowTo = useCallback(() => setHowToOpen(true), []);
+  const closeHowTo = useCallback(() => setHowToOpen(false), []);
 
   const notify = (msg: string) => {
     if (Platform.OS === "android") ToastAndroid.show(msg, ToastAndroid.SHORT);
@@ -480,16 +483,16 @@ export default function OrganizeIndexScreen() {
         })
         .filter((x): x is { _idx: number; lat: number; lng: number; distToCbdM: number } => !!x);
 
-      console.log(`${PLACE_LOG_PREFIX} valid coords`, {
-        validCount: valid.length,
-        invalidCount: (raw?.length ?? 0) - valid.length,
-        sample: valid.slice(0, 8).map((v) => ({
-          idx: v._idx,
-          lat: Number(v.lat.toFixed(6)),
-          lng: Number(v.lng.toFixed(6)),
-          distToCbdM: Math.round(v.distToCbdM),
-        })),
-      });
+    console.log(`${PLACE_LOG_PREFIX} valid coords`, {
+      validCount: valid.length,
+      invalidCount: (raw?.length ?? 0) - valid.length,
+      sample: valid.slice(0, 8).map((v) => ({
+        idx: v._idx,
+        lat: Number(v.lat.toFixed(6)),
+        lng: Number(v.lng.toFixed(6)),
+        distToCbdM: Math.round(v.distToCbdM),
+      })),
+    });
 
       valid.sort((a, b) => a.distToCbdM - b.distToCbdM);
 
@@ -968,7 +971,12 @@ export default function OrganizeIndexScreen() {
       }
 
       if (!coordsManual) {
-        const decision: CreateSafetyDecision = await runCreateLocationSafetyCheck(address, finalLatN, finalLngN, geocodeRawForSafety);
+        const decision: CreateSafetyDecision = await runCreateLocationSafetyCheck(
+          address,
+          finalLatN,
+          finalLngN,
+          geocodeRawForSafety
+        );
 
         if (decision.kind === "block") {
           setErrorsAndScroll({
@@ -1098,6 +1106,35 @@ export default function OrganizeIndexScreen() {
     return (RADIUS_PRESETS_M as readonly number[]).includes(n) ? n : null;
   }, [radiusM]);
 
+  const howToBody = useMemo(() => {
+    const lines: string[] = [];
+
+    lines.push("Quick start");
+    lines.push("• Enter a Title, start/end time and Venue address, then tap Create.");
+    lines.push("");
+    lines.push("Venue address (two options)");
+    lines.push("1) Type an address directly (place name is optional in this case).");
+    lines.push(
+      "2) Type a place (e.g. “Melbourne Central”) in the Place name section, then click OPEN MAPS button, copy an address from Google Maps and paste it in the Venue address field."
+    );
+    lines.push("");
+    lines.push("Coordinates");
+    lines.push("• Used for geofence check-in.");
+    lines.push("• Tap “SET COORDS FROM ADDRESS” to preview coordinates.");
+    lines.push("• If the address changes, coordinates will be re-derived on Create.");
+    lines.push("• Use “Show advanced (lat/lng)” only if you want to enter coordinates manually.");
+    lines.push("");
+    lines.push("Radius / Window");
+    lines.push("• Radius (m): how far from the venue center counts as inside.");
+    lines.push("• Window ± (min): allowed minutes before/after the event time.");
+    lines.push("");
+    lines.push("Advanced");
+    lines.push("• “Show advanced (UTC ISO)” shows the stored timestamps (UTC ISO ending in Z).");
+    lines.push("• “Show quick search (experimental)” may return wrong coordinates.");
+
+    return lines.join("\n");
+  }, []);
+
   if (loading) {
     return (
       <View style={[styles.container, styles.center]}>
@@ -1114,7 +1151,26 @@ export default function OrganizeIndexScreen() {
       contentContainerStyle={{ paddingBottom: 24 }}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
-      <Text style={styles.header}>Organize</Text>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+        <Text style={styles.header}>Organize</Text>
+        <TouchableOpacity
+          onPress={openHowTo}
+          accessibilityRole="button"
+          accessibilityLabel="How to use"
+          style={{
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: "#111827",
+            alignItems: "center",
+            justifyContent: "center",
+            marginTop: Platform.OS === "android" ? 8 : 0,
+          }}
+        >
+          <Text style={{ fontWeight: "900", color: "#111827" }}>?</Text>
+        </TouchableOpacity>
+      </View>
 
       {error ? (
         <View style={styles.bannerError}>
@@ -1307,10 +1363,6 @@ export default function OrganizeIndexScreen() {
               autoCorrect={false}
             />
 
-            <Text style={[styles.helpSmall, { marginTop: -2 }]}>
-              If you only know a place name, search it in Google Maps, then paste the full address here.
-            </Text>
-
             <View style={{ height: 10 }} />
 
             <View style={styles.row}>
@@ -1338,21 +1390,17 @@ export default function OrganizeIndexScreen() {
             </View>
 
             <View style={styles.rowBetween}>
-              <Text style={styles.helpSmall}>
-                {hasCoords
-                  ? coordsManual
-                    ? "Coordinates set (manual override)."
-                    : coordsStale
-                      ? "Coordinates set (stale — address changed; will re-derive on Create)."
-                      : "Coordinates set."
-                  : "No coordinates yet. Create will derive from address, or use Advanced lat/lng."}
-              </Text>
+              <View />
               <TouchableOpacity style={styles.advancedToggleInline} onPress={() => setShowAdvancedLocation((v) => !v)}>
                 <Text style={styles.advancedToggleText}>
                   {showAdvancedLocation ? "Hide advanced (lat/lng)" : "Show advanced (lat/lng)"}
                 </Text>
               </TouchableOpacity>
             </View>
+
+            {coordsStale ? (
+              <Text style={[styles.helpSmall, { marginTop: 4 }]}>Coordinates are stale (address changed).</Text>
+            ) : null}
 
             {showAdvancedLocation ? (
               <View style={styles.advancedBlock}>
@@ -1516,11 +1564,6 @@ export default function OrganizeIndexScreen() {
           >
             <Text style={styles.primaryBtnText}>{submitting ? "Creating…" : "Create"}</Text>
           </TouchableOpacity>
-
-          <Text style={styles.helpSmall}>
-            Required: title + venue address. Venue name is optional. Coordinates are auto-derived from address on Create
-            (or use Advanced lat/lng). Times are stored as UTC ISO. Coordinates are used for geofence check-in.
-          </Text>
         </View>
       ) : (
         <View style={styles.card}>
@@ -1586,6 +1629,27 @@ export default function OrganizeIndexScreen() {
         <Text style={[styles.helpSmall, { marginTop: 10 }]}>Selected group: {groupLabel}</Text>
       </View>
 
+      <Modal visible={howToOpen} transparent animationType="fade" onRequestClose={closeHowTo}>
+        <View style={styles.modalOverlay}>
+          <Pressable
+            onPress={closeHowTo}
+            style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0 }}
+          />
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>How to use</Text>
+            <Text style={styles.modalBody}>{howToBody}</Text>
+
+            <View style={{ height: 12 }} />
+
+            <View style={styles.modalFooter}>
+              <TouchableOpacity style={styles.modalPrimaryBtn} onPress={closeHowTo}>
+                <Text style={styles.modalPrimaryBtnText}>Close</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <Modal visible={manageOpen} transparent animationType="fade" onRequestClose={closeManageGroups}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -1623,7 +1687,9 @@ export default function OrganizeIndexScreen() {
       <Modal visible={startPickerOpen} transparent animationType="slide" onRequestClose={closeStartPicker}>
         <View style={styles.modalOverlay}>
           <View style={styles.pickerModalCard}>
-            <Text style={styles.modalTitle}>{startPickerStep === "date" ? "Select start date" : "Select start time"}</Text>
+            <Text style={styles.modalTitle}>
+              {startPickerStep === "date" ? "Select start date" : "Select start time"}
+            </Text>
             <Text style={styles.modalBody}>Preview: {tempStartPreview}</Text>
 
             <View style={{ height: 12 }} />
