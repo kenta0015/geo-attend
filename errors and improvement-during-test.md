@@ -1,14 +1,5 @@
 #　注意！！　 geoffence 機能に影響がありそうな変更は行わない！！もしくはブランチを分けて作業する ⚠️
 
-## dev 機能を本番で出さないように
-
-- サインインページの Dev っぽい表示
-- history 画面
-- profile 画面
-- organize 画面
-
--Attendee 側でイベントの open details を開いた先の Dev 項目
-
 ##　不具合
 
 - QR コードが読めない(apple menbership 後)

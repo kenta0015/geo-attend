@@ -1150,7 +1150,22 @@ internal の versionCode は「EAS の remote 管理に任せる」（＝ intern
 
 あと、QR はできれば Expo Go アプリ内の Scan から読むのが安全（スマホのカメラだと Dev Client に吸われがち）。
 
-
 ## 本番用コマンド
 
 npx expo start --no-dev --minify
+
+## 一番確実に「今の bundle を読ませる」手順（これでズレを潰せます）
+
+Expo Go を完全終了（アプリをスワイプで落とす）
+
+Android なら Expo Go のアプリ情報 → ストレージ → データ削除/キャッシュ削除（最強）
+
+Metro も止める（ターミナルで Ctrl+C）
+
+ポートを変えて起動（これが効きます）
+
+npx expo start -c --no-dev --minify --port 8082
+
+必ず新しい QR をスキャン（Expo Go の履歴から開かない）
+
+これで端末が新サーバに取りに来るので、通常はここで Android Bundled ... が出ます

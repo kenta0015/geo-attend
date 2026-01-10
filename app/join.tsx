@@ -1,6 +1,7 @@
 // app/join.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { View, Text, TextInput, Button, StyleSheet, Alert, Platform } from "react-native";
+import { View, Text, TextInput, Button, StyleSheet, Alert, Platform, TouchableOpacity } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import * as Crypto from "expo-crypto";
 import { supabase } from "../lib/supabase";
@@ -90,6 +91,8 @@ export default function JoinScreen() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [didAutoNav, setDidAutoNav] = useState(false);
@@ -135,10 +138,7 @@ export default function JoinScreen() {
         }
       }
 
-      Alert.alert(
-        "Joined",
-        `${rewritten ? "DEV token rewritten" : "Token accepted"}\nuserId=${usedUserId.slice(0, 8)}…`
-      );
+      Alert.alert("Joined", `${rewritten ? "DEV token rewritten" : "Token accepted"}\nuserId=${usedUserId.slice(0, 8)}…`);
 
       router.replace({
         pathname: "/(tabs)/organize/events/[id]",
@@ -249,13 +249,29 @@ export default function JoinScreen() {
 
       <View style={styles.row}>
         <Text style={styles.label}>Password</Text>
-        <TextInput
-          value={password}
-          onChangeText={setPassword}
-          placeholder="••••••••"
-          secureTextEntry
-          style={styles.input}
-        />
+
+        <View style={styles.passwordField}>
+          <TextInput
+            value={password}
+            onChangeText={setPassword}
+            placeholder="••••••••"
+            secureTextEntry={!showPassword}
+            style={styles.passwordInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+            textContentType="password"
+          />
+
+          <TouchableOpacity
+            onPress={() => setShowPassword((v) => !v)}
+            style={styles.eyeBtn}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+          >
+            <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={20} color="#6B7280" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={styles.buttons}>
@@ -280,24 +296,16 @@ export default function JoinScreen() {
 
           <Text style={styles.subtitle}>Join via Token</Text>
           <View style={styles.buttons}>
-            <Button
-              title={loading ? "Processing..." : "Join with token"}
-              onPress={joinWithToken}
-              disabled={loading}
-            />
+            <Button title={loading ? "Processing..." : "Join with token"} onPress={joinWithToken} disabled={loading} />
           </View>
 
           <Text style={styles.note}>• Token URL param is auto-processed when opening rta://join?token=...</Text>
           <Text style={styles.note}>• eventId-style deep links are also supported: rta://join?eventId=...</Text>
-          <Text style={styles.note}>
-            • DEV token is supported: it will be rewritten with your signed-in userId and re-signed.
-          </Text>
+          <Text style={styles.note}>• DEV token is supported: it will be rewritten with your signed-in userId and re-signed.</Text>
           <Text style={styles.note}>
             • Make sure EXPO_PUBLIC_SUPABASE_URL / EXPO_PUBLIC_SUPABASE_ANON_KEY / EXPO_PUBLIC_QR_SECRET are set.
           </Text>
-          <Text style={styles.note}>
-            • On Android, prefer a Dev Client build for background geofencing and local notifications.
-          </Text>
+          <Text style={styles.note}>• On Android, prefer a Dev Client build for background geofencing and local notifications.</Text>
         </>
       ) : null}
     </View>
@@ -311,6 +319,7 @@ const styles = StyleSheet.create({
   row: { gap: 6 },
   label: { color: "#444", fontWeight: "600" },
   value: { color: "#111", fontWeight: "600" },
+
   input: {
     borderWidth: 1,
     borderColor: "#ccc",
@@ -318,6 +327,27 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: Platform.select({ ios: 12, android: 8, default: 8 }),
   },
+
+  passwordField: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: Platform.select({ ios: 12, android: 8, default: 8 }),
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 0,
+    paddingRight: 8,
+  },
+  eyeBtn: {
+    paddingLeft: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
   buttons: { flexDirection: "row", gap: 12, flexWrap: "wrap" },
   sep: { height: 1, backgroundColor: "#eee", marginVertical: 8 },
   note: { color: "#0a7ea4" },

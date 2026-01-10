@@ -11,13 +11,16 @@ import {
   Modal,
   TextInput,
   KeyboardAvoidingView,
+  Pressable,
+  Linking,
+  ScrollView,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { router } from "expo-router";
 import { getGuestId } from "../../../stores/session";
 import Button from "../../ui/Button";
 import { supabase } from "../../../lib/supabase";
-import { useEffectiveRole, devSwitchEnabled } from "../../../stores/devRole";
+import { useEffectiveRole } from "../../../stores/devRole";
 import { getAvatarSignedUrl } from "../../../lib/avatarUrl";
 import {
   pickAvatarFromLibrary,
@@ -27,7 +30,7 @@ import {
   removeAvatarForUser,
 } from "../../../lib/avatarUpload";
 
-const enableDev = devSwitchEnabled();
+const PRIVACY_POLICY_FALLBACK_URL = "https://kenta0015.github.io/geo-attend/privacy.html";
 
 export default function ProfileScreen() {
   const [guestId, setGuestId] = useState<string>("(loading…)");
@@ -45,14 +48,43 @@ export default function ProfileScreen() {
   const [editName, setEditName] = useState("");
   const [savingName, setSavingName] = useState(false);
 
-  const role = useEffectiveRole();
+  const [privacyOpen, setPrivacyOpen] = useState(false);
 
+  const role = useEffectiveRole();
   const isAuthenticated = !!sessionUserId;
 
-  const notify = (m: string) =>
-    Platform.OS === "android"
-      ? ToastAndroid.show(m, ToastAndroid.SHORT)
-      : Alert.alert("Info", m);
+  const notify = useCallback(
+    (m: string) => (Platform.OS === "android" ? ToastAndroid.show(m, ToastAndroid.SHORT) : Alert.alert("Info", m)),
+    []
+  );
+
+  const openUrl = useCallback(
+    async (url: string) => {
+      try {
+        const u = url.trim();
+        if (!u) throw new Error("URL is empty");
+        try {
+          const ok = await Linking.canOpenURL(u);
+          if (!ok) {
+            await Linking.openURL(u);
+            return;
+          }
+        } catch {
+          // ignore and try openURL below
+        }
+        await Linking.openURL(u);
+      } catch (e: any) {
+        notify(e?.message ?? "Failed to open link");
+      }
+    },
+    [notify]
+  );
+
+  const openPrivacyPolicyUrl = useCallback(async () => {
+    const envUrl = String(process.env.EXPO_PUBLIC_PRIVACY_URL ?? "").trim();
+    const url = envUrl || PRIVACY_POLICY_FALLBACK_URL;
+    await openUrl(url);
+  }, [openUrl]);
 
   const loadSession = useCallback(async () => {
     try {
@@ -67,7 +99,7 @@ export default function ProfileScreen() {
     }
   }, []);
 
-  const handleSignOut = async () => {
+  const handleSignOut = useCallback(async () => {
     setSigningOut(true);
     try {
       const { error } = await supabase.auth.signOut();
@@ -78,51 +110,49 @@ export default function ProfileScreen() {
       setProfileName(null);
       setEditName("");
       setNameModalOpen(false);
+      setPrivacyOpen(false);
     } catch (e: any) {
       notify(e?.message ?? "Sign out failed");
     } finally {
       setSigningOut(false);
     }
-  };
+  }, [notify]);
 
   const loadGuestId = useCallback(async () => {
     const id = await getGuestId();
     setGuestId(id);
   }, []);
 
-  const refreshProfileFromDb = useCallback(
-    async (userId: string) => {
-      try {
-        const { data, error } = await supabase
-          .from("user_profile")
-          .select("avatar_path, avatar_updated_at, display_name, ice_name")
-          .eq("user_id", userId)
-          .maybeSingle();
+  const refreshProfileFromDb = useCallback(async (userId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from("user_profile")
+        .select("avatar_path, avatar_updated_at, display_name, ice_name")
+        .eq("user_id", userId)
+        .maybeSingle();
 
-        if (error) throw error;
+      if (error) throw error;
 
-        const nextPath = (data as any)?.avatar_path ?? null;
-        setAvatarPath(nextPath);
+      const nextPath = (data as any)?.avatar_path ?? null;
+      setAvatarPath(nextPath);
 
-        const displayName = String((data as any)?.display_name ?? "").trim();
-        const iceName = String((data as any)?.ice_name ?? "").trim();
-        const bestName = (displayName || iceName || "").trim();
-        setProfileName(bestName ? bestName : null);
+      const displayName = String((data as any)?.display_name ?? "").trim();
+      const iceName = String((data as any)?.ice_name ?? "").trim();
+      const bestName = (displayName || iceName || "").trim();
+      setProfileName(bestName ? bestName : null);
 
-        if (nextPath) {
-          const url = await getAvatarSignedUrl(nextPath);
-          setAvatarUrl(url);
-        } else {
-          setAvatarUrl(null);
-        }
-      } catch {
-        setAvatarPath(null);
+      if (nextPath) {
+        const url = await getAvatarSignedUrl(nextPath);
+        setAvatarUrl(url);
+      } else {
         setAvatarUrl(null);
-        setProfileName(null);
       }
-    },
-    [setAvatarPath, setAvatarUrl, setProfileName]
-  );
+    } catch {
+      setAvatarPath(null);
+      setAvatarUrl(null);
+      setProfileName(null);
+    }
+  }, []);
 
   useEffect(() => {
     loadGuestId();
@@ -147,6 +177,7 @@ export default function ProfileScreen() {
         setProfileName(null);
         setEditName("");
         setNameModalOpen(false);
+        setPrivacyOpen(false);
       }
     });
 
@@ -286,10 +317,7 @@ export default function ProfileScreen() {
         ice_name: trimmed,
       };
 
-      const { error } = await supabase
-        .from("user_profile")
-        .upsert([payload], { onConflict: "user_id" });
-
+      const { error } = await supabase.from("user_profile").upsert([payload], { onConflict: "user_id" });
       if (error) throw error;
 
       setProfileName(trimmed);
@@ -335,15 +363,7 @@ export default function ProfileScreen() {
                 />
               </>
             ) : (
-              <>
-                <Text style={styles.hint}>Sign in to set a profile photo.</Text>
-                <Button
-                  title="Sign in"
-                  onPress={handleGoToJoin}
-                  disabled={avatarBusy}
-                  style={styles.actionButton}
-                />
-              </>
+              <Button title="Sign in" onPress={handleGoToJoin} disabled={avatarBusy} style={styles.actionButton} />
             )}
           </View>
         </View>
@@ -361,52 +381,43 @@ export default function ProfileScreen() {
               />
             </>
           ) : (
-            <>
-              <Text style={styles.hint}>Sign in to set your name.</Text>
-              <Button title="Sign in" onPress={handleGoToJoin} style={styles.actionButton} />
-            </>
+            <Button title="Sign in" onPress={handleGoToJoin} style={styles.actionButton} />
           )}
         </View>
-
-        {isAuthenticated ? (
-          <Text style={styles.hint}>
-            Your photo is stored privately and only shared with organizers when appropriate.
-          </Text>
-        ) : (
-          <Text style={styles.hint}>Guest profiles cannot upload photos.</Text>
-        )}
       </View>
 
       <View style={styles.card}>
         <Text style={styles.label}>Current role</Text>
         <Text style={styles.value}>{role.toUpperCase()}</Text>
-        <Text style={styles.hint}>
-          {enableDev ? "Toggle via the yellow DEV ROLE badge." : "Role is determined by your account on the server."}
-        </Text>
       </View>
 
       <View style={styles.card}>
         <Text style={styles.label}>Guest ID</Text>
         <Text style={styles.mono}>{guestId}</Text>
-        <Text style={styles.hint}>Stored locally. Resetting app data will change this value.</Text>
       </View>
 
       <View style={styles.card}>
         <Text style={styles.label}>Account</Text>
-        <Text style={styles.hint}>Sign out to switch account or return to guest mode.</Text>
         <Button
           title={signingOut ? "Signing out…" : "Sign out"}
           onPress={handleSignOut}
           disabled={signingOut}
           style={styles.logoutButton}
         />
+
+        <View style={{ height: 10 }} />
+
+        <Pressable
+          onPress={() => setPrivacyOpen(true)}
+          style={styles.linkRow}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Text style={styles.linkText}>Privacy</Text>
+        </Pressable>
       </View>
 
-      <Modal visible={nameModalOpen} animationType="slide" transparent>
-        <KeyboardAvoidingView
-          behavior={Platform.select({ ios: "padding", android: undefined })}
-          style={styles.modalWrap}
-        >
+      <Modal visible={nameModalOpen} animationType="slide" transparent onRequestClose={() => setNameModalOpen(false)}>
+        <KeyboardAvoidingView behavior={Platform.select({ ios: "padding", android: undefined })} style={styles.modalWrap}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Change name</Text>
 
@@ -436,6 +447,40 @@ export default function ProfileScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <Modal visible={privacyOpen} animationType="fade" transparent onRequestClose={() => setPrivacyOpen(false)}>
+        <View style={styles.modalWrap}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Privacy</Text>
+
+            <ScrollView style={styles.privacyScroll} contentContainerStyle={{ paddingBottom: 6 }}>
+              <Text style={styles.privacyText}>
+                • Your profile name and photo (if signed in) are stored in Supabase for your account.
+              </Text>
+              <Text style={styles.privacyText}>
+                • Your Guest ID is stored locally on this device. Resetting app data will change it.
+              </Text>
+              <Text style={styles.privacyText}>
+                • Location permissions are used for event check-in features (GPS / geofence), depending on your role and
+                event settings.
+              </Text>
+              <Text style={styles.privacyText}>
+                • If you open a shared link or join a group, organizers may be able to see relevant attendance results.
+              </Text>
+
+              <View style={{ height: 10 }} />
+
+              <Text style={styles.privacyHint}>Tap “Open full policy” to view the full Privacy Policy.</Text>
+            </ScrollView>
+
+            <View style={styles.modalButtons}>
+              <Button title="Close" onPress={() => setPrivacyOpen(false)} />
+              <View style={{ width: 10 }} />
+              <Button title="Open full policy" onPress={openPrivacyPolicyUrl} />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -457,7 +502,6 @@ const styles = StyleSheet.create({
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
     color: "#111827",
   },
-  hint: { color: "#6B7280", marginTop: 6, fontSize: 12 },
   logoutButton: { marginTop: 8, alignSelf: "flex-start" },
 
   avatarRow: { flexDirection: "row", alignItems: "center" },
@@ -480,6 +524,14 @@ const styles = StyleSheet.create({
   nameBlock: { marginTop: 10 },
   nameLabel: { fontSize: 12, fontWeight: "700", color: "#111827" },
   nameValue: { marginTop: 6, fontSize: 16, fontWeight: "700", color: "#111827" },
+
+  linkRow: { alignSelf: "flex-start" },
+  linkText: {
+    color: "#2563EB",
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    textDecorationLine: "underline",
+  },
 
   modalWrap: {
     flex: 1,
@@ -506,4 +558,8 @@ const styles = StyleSheet.create({
     color: "#111827",
   },
   modalButtons: { flexDirection: "row", justifyContent: "flex-end", marginTop: 12 },
+
+  privacyScroll: { maxHeight: 280 },
+  privacyText: { color: "#111827", fontSize: 13, lineHeight: 18, marginBottom: 8 },
+  privacyHint: { color: "#6B7280", fontSize: 12, lineHeight: 16 },
 });
