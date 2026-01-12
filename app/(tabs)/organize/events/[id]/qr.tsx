@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Share } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import QRCode from "react-native-qrcode-svg";
 import { getGuestId } from "../../../../../stores/session";
 import { currentSlot, makeToken, PERIOD_SEC } from "../../../../../lib/qr";
@@ -133,6 +133,14 @@ export default function Screen() {
     }
   };
 
+  const goToScan = () => {
+    if (!eventId) return;
+    router.push({
+      pathname: "/organize/events/[id]/scan",
+      params: { id: eventId },
+    } as any);
+  };
+
   if (!eventId) {
     return (
       <View style={styles.center}>
@@ -168,6 +176,10 @@ export default function Screen() {
         )}
       </View>
 
+      <TouchableOpacity onPress={goToScan} style={styles.outlineSmall}>
+        <Text style={styles.outlineSmallText}>SCAN QR</Text>
+      </TouchableOpacity>
+
       <View style={{ width: "86%", height: 8, borderRadius: 999, backgroundColor: "#E5E7EB", overflow: "hidden" }}>
         <View style={{ width: `${Math.max(0, Math.min(100, progress * 100))}%`, height: "100%", backgroundColor: "#2563eb" }} />
       </View>
@@ -201,7 +213,15 @@ const styles = StyleSheet.create({
   container: { flex: 1, alignItems: "center", paddingTop: 24, gap: 12, backgroundColor: "#fff" },
   center: { flex: 1, alignItems: "center", justifyContent: "center", gap: 8 },
   title: { fontSize: 18, fontWeight: "800" },
-  qrBox: { padding: 16, backgroundColor: "#F3F4F6", borderRadius: 16, alignItems: "center", justifyContent: "center", minHeight: 280, minWidth: 280 },
+  qrBox: {
+    padding: 16,
+    backgroundColor: "#F3F4F6",
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 280,
+    minWidth: 280,
+  },
   qrLoading: { alignItems: "center", justifyContent: "center", gap: 8, minHeight: 240 },
   dim: { color: "#6B7280" },
   help: { color: "#374151", marginTop: 6, textAlign: "center" },
@@ -209,4 +229,19 @@ const styles = StyleSheet.create({
   primaryText: { color: "#fff", fontWeight: "700" },
   outline: { flex: 1, borderWidth: 2, borderColor: "#2563eb", borderRadius: 12, paddingVertical: 12, alignItems: "center" },
   outlineText: { color: "#2563eb", fontWeight: "700" },
+  outlineSmall: {
+    borderWidth: 1,
+    borderColor: "#2563eb",
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  outlineSmallText: {
+    color: "#2563eb",
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    fontSize: 12,
+  },
 });

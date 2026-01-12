@@ -6,8 +6,7 @@
 
 ## 要改善
 
--イベント内の live(organizer)→Check-in Rank 名称変更
--Checkin list を open detail→check in list ではなく　 open detail bottun と横並びにさせる
+-Check 　 in list を open detail を押す →check in list ではなく　 現在の場所から”open detail” bottun と横並びにさせる様にする
 -organize page の manage group をもう少し目立たせる
 
 ## 重点チェックで見つかった「不整合・バグになりそうな点」

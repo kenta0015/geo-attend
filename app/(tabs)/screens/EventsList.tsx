@@ -631,7 +631,7 @@ function section(
                 </View>
                 <View style={{ flex: 1 }}>
                   <Button
-                    title="Live (Organizer)"
+                    title="check in rank"
                     onPress={() => {
                       console.log("[EventsList] nav -> live", e.id);
                       router.push(`/organize/events/${e.id}/live`);

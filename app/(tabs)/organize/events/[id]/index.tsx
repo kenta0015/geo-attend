@@ -1,4 +1,5 @@
 // app/(tabs)/organize/events/[id]/index.tsx
+// app/(tabs)/organize/events/[id]/index.tsx
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
@@ -30,6 +31,7 @@ type EventRow = {
   venue_lng: number | null;
   venue_radius_m: number | null;
   location_name?: string | null;
+  address_text?: string | null;
 };
 
 type RSVPStatus = "going" | "not_going" | null;
@@ -158,6 +160,74 @@ async function openAppSettingsSafe() {
   } catch {}
 }
 
+function buildGoogleMapsSearchUrl(query: string): string {
+  const q = query.trim();
+  if (!q) return "https://www.google.com/maps";
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
+function formatWhenLocalLine(startUtc?: string | null, endUtc?: string | null): string {
+  if (!startUtc || !endUtc) return "—";
+
+  const start = new Date(startUtc);
+  const end = new Date(endUtc);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return `${String(startUtc ?? "—")}–${String(endUtc ?? "—")}`;
+  }
+
+  const dateStr = (() => {
+    try {
+      return start.toLocaleDateString();
+    } catch {
+      return start.toDateString();
+    }
+  })();
+
+  const startTime = (() => {
+    try {
+      return start.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return start.toTimeString().slice(0, 5);
+    }
+  })();
+
+  const endTime = (() => {
+    try {
+      return end.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    } catch {
+      return end.toTimeString().slice(0, 5);
+    }
+  })();
+
+  const sameLocalDay =
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate();
+
+  if (sameLocalDay) {
+    return `${dateStr} ${startTime}–${endTime}`;
+  }
+
+  const endDateStr = (() => {
+    try {
+      return end.toLocaleDateString();
+    } catch {
+      return end.toDateString();
+    }
+  })();
+
+  return `${dateStr} ${startTime} – ${endDateStr} ${endTime}`;
+}
+
+function formatLatLngLine(lat: number | null, lng: number | null): string {
+  if (lat == null || lng == null) return "—";
+  try {
+    return `${Number(lat.toFixed(6))}, ${Number(lng.toFixed(6))}`;
+  } catch {
+    return `${lat}, ${lng}`;
+  }
+}
+
 // =============================================================================
 export default function OrganizeEventDetail() {
   const params = useLocalSearchParams<{ id?: string }>();
@@ -238,7 +308,7 @@ export default function OrganizeEventDetail() {
         const { data, error } = await supabase
           .from("events")
           .select(
-            "id,title,start_utc,end_utc,venue_lat:lat,venue_lng:lng,venue_radius_m:radius_m,location_name"
+            "id,title,start_utc,end_utc,venue_lat:lat,venue_lng:lng,venue_radius_m:radius_m,location_name,address_text"
           )
           .eq("id", eid)
           .maybeSingle();
@@ -253,6 +323,40 @@ export default function OrganizeEventDetail() {
       }
     })();
   }, [eid]);
+
+  const whenLine = useMemo(
+    () => formatWhenLocalLine(eventRow?.start_utc, eventRow?.end_utc),
+    [eventRow?.end_utc, eventRow?.start_utc]
+  );
+
+  const mapsSearchQuery = useMemo(() => {
+    const addr = String(eventRow?.address_text ?? "").trim();
+    if (addr) return addr;
+    const loc = String(eventRow?.location_name ?? "").trim();
+    if (loc) return loc;
+    const lat = eventRow?.venue_lat ?? null;
+    const lng = eventRow?.venue_lng ?? null;
+    if (typeof lat === "number" && typeof lng === "number") return `${lat},${lng}`;
+    return "";
+  }, [eventRow?.address_text, eventRow?.location_name, eventRow?.venue_lat, eventRow?.venue_lng]);
+
+  const canOpenMaps = useMemo(() => mapsSearchQuery.trim().length > 0, [mapsSearchQuery]);
+
+  const handleOpenMaps = useCallback(async () => {
+    try {
+      const q = mapsSearchQuery.trim();
+      if (!q) {
+        Alert.alert("Missing location", "No address or coordinates are available for this event.");
+        return;
+      }
+      const url = buildGoogleMapsSearchUrl(q);
+      await Linking.openURL(url);
+    } catch (e: any) {
+      Alert.alert("Failed to open Google Maps", e?.message ?? "Unable to open link.");
+    }
+  }, [mapsSearchQuery]);
+
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   // === RSVP (Attendee) =======================================================
   const [rsvp, setRsvp] = useState<RSVPStatus | null>(null);
@@ -422,6 +526,7 @@ export default function OrganizeEventDetail() {
   const [attendeeCheckStatus, setAttendeeCheckStatus] = useState<string>("—");
   const [attendeeStartBusy, setAttendeeStartBusy] = useState(false);
   const [attendeeStopBusy, setAttendeeStopBusy] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
 
   const refreshAttendeeCheckStatus = useCallback(async () => {
     try {
@@ -804,35 +909,31 @@ export default function OrganizeEventDetail() {
 
   const handleDeleteEvent = useCallback(() => {
     if (!eventRow) return;
-    Alert.alert(
-      "Delete event",
-      "This will permanently delete this event. This action cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
+    Alert.alert("Delete event", "This will permanently delete this event. This action cannot be undone.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            setDeleteBusy(true);
             try {
-              setDeleteBusy(true);
-              try {
-                await disarmGeofence();
-              } catch {}
-              const { error } = await supabase.from("events").delete().eq("id", eventRow.id);
-              if (error) throw error;
-              try {
-                Alert.alert("Deleted", "Event has been deleted.");
-              } catch {}
-              router.replace("/events");
-            } catch (e: any) {
-              Alert.alert("Delete failed", e?.message ?? "Unable to delete event.");
-            } finally {
-              setDeleteBusy(false);
-            }
-          },
+              await disarmGeofence();
+            } catch {}
+            const { error } = await supabase.from("events").delete().eq("id", eventRow.id);
+            if (error) throw error;
+            try {
+              Alert.alert("Deleted", "Event has been deleted.");
+            } catch {}
+            router.replace("/events");
+          } catch (e: any) {
+            Alert.alert("Delete failed", e?.message ?? "Unable to delete event.");
+          } finally {
+            setDeleteBusy(false);
+          }
         },
-      ]
-    );
+      },
+    ]);
   }, [eventRow]);
 
   if (!eid) {
@@ -866,14 +967,43 @@ export default function OrganizeEventDetail() {
 
       <View style={styles.card}>
         <Text style={styles.sectionLabel}>Event</Text>
-        <Row label="Start (UTC)" value={String(eventRow.start_utc ?? "—")} />
-        <Row label="End (UTC)" value={String(eventRow.end_utc ?? "—")} />
-        <Row label="Location" value={String(eventRow.location_name ?? "—")} />
-        <Row
-          label="Center (lat,lng)"
-          value={`${eventRow.venue_lat ?? 0}, ${eventRow.venue_lng ?? 0}`}
-        />
-        <Row label="Radius (m)" value={String(eventRow.venue_radius_m ?? 100)} />
+
+        <Row label="When" value={whenLine} />
+
+        <View style={styles.locationRow}>
+          <Text style={styles.rowLabel}>Location</Text>
+          <View style={styles.locationRight}>
+            <View style={styles.locationTopLine}>
+              <Text style={styles.rowValue} numberOfLines={2}>
+                {String(eventRow.location_name ?? "—")}
+              </Text>
+              <TouchableOpacity
+                style={[styles.btnOutlineSmall, !canOpenMaps && { opacity: 0.5 }]}
+                onPress={handleOpenMaps}
+                disabled={!canOpenMaps}
+              >
+                <Text style={styles.btnOutlineSmallText}>Maps</Text>
+              </TouchableOpacity>
+            </View>
+
+            {String(eventRow.address_text ?? "").trim().length > 0 ? (
+              <Text style={styles.subRowText} numberOfLines={3}>
+                {String(eventRow.address_text)}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+
+        <TouchableOpacity style={styles.detailsToggle} onPress={() => setDetailsOpen((v) => !v)}>
+          <Text style={styles.detailsToggleText}>{detailsOpen ? "Hide details" : "Show details"}</Text>
+        </TouchableOpacity>
+
+        {detailsOpen ? (
+          <View style={{ marginTop: 4 }}>
+            <Row label="Center (lat,lng)" value={formatLatLngLine(eventRow.venue_lat, eventRow.venue_lng)} />
+            <Row label="Radius (m)" value={String(eventRow.venue_radius_m ?? 100)} />
+          </View>
+        ) : null}
       </View>
 
       {role === "attendee" ? (
@@ -885,9 +1015,7 @@ export default function OrganizeEventDetail() {
               onPress={() => saveRsvp("going")}
               disabled={rsvpBusy}
             >
-              <Text style={[styles.rsvpChipText, rsvp === "going" && styles.rsvpChipTextActive]}>
-                Going
-              </Text>
+              <Text style={[styles.rsvpChipText, rsvp === "going" && styles.rsvpChipTextActive]}>Going</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -895,14 +1023,7 @@ export default function OrganizeEventDetail() {
               onPress={() => saveRsvp("not_going")}
               disabled={rsvpBusy}
             >
-              <Text
-                style={[
-                  styles.rsvpChipText,
-                  rsvp === "not_going" && styles.rsvpChipTextActive,
-                ]}
-              >
-                Not going
-              </Text>
+              <Text style={[styles.rsvpChipText, rsvp === "not_going" && styles.rsvpChipTextActive]}>Not going</Text>
             </TouchableOpacity>
           </View>
 
@@ -910,10 +1031,7 @@ export default function OrganizeEventDetail() {
             <View style={styles.devPanel}>
               <Text style={styles.devTitle}>DEV — Metrics</Text>
               <Row label="Accuracy" value={devAcc == null ? "—" : `${Math.round(devAcc)}m`} />
-              <Row
-                label="Distance to venue"
-                value={devDist == null ? "—" : `${Math.round(devDist)} m`}
-              />
+              <Row label="Distance to venue" value={devDist == null ? "—" : `${Math.round(devDist)} m`} />
               <Row
                 label="Inside radius?"
                 value={devInside == null ? "—" : devInside ? "Yes (inside)" : "No (outside)"}
@@ -923,9 +1041,7 @@ export default function OrganizeEventDetail() {
                 onPress={refreshMetrics}
                 disabled={devBusy}
               >
-                <Text style={styles.btnOutlineText}>
-                  {devBusy ? "Refreshing…" : "REFRESH METRICS"}
-                </Text>
+                <Text style={styles.btnOutlineText}>{devBusy ? "Refreshing…" : "REFRESH METRICS"}</Text>
               </TouchableOpacity>
             </View>
           ) : null}
@@ -942,16 +1058,58 @@ export default function OrganizeEventDetail() {
           ) : null}
 
           <View style={{ height: 10 }} />
-          <TouchableOpacity
-            style={[styles.btnOutline]}
-            onPress={() => router.push({ pathname: "/attend/scan" } as any)}
-          >
+          <TouchableOpacity style={[styles.btnOutline]} onPress={() => router.push({ pathname: "/attend/scan" } as any)}>
             <Text style={styles.btnOutlineText}>OPEN SCANNER</Text>
           </TouchableOpacity>
         </View>
       ) : (
         <View style={styles.card}>
           <Text style={styles.sectionLabel}>Organizer</Text>
+
+          <TouchableOpacity
+            style={[styles.btnPrimary, deleteBusy && { opacity: 0.6 }]}
+            onPress={() =>
+              router.push({
+                pathname: "/organize/events/[id]/checkin",
+                params: { id: eventRow.id },
+              })
+            }
+            disabled={deleteBusy}
+          >
+            <Text style={styles.btnPrimaryText}>CHECK-IN LIST</Text>
+          </TouchableOpacity>
+
+          <View style={{ height: 10 }} />
+
+          <TouchableOpacity
+            style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
+            onPress={() =>
+              router.push({
+                pathname: "/organize/events/[id]/live",
+                params: { id: eventRow.id },
+              } as any)
+            }
+            disabled={deleteBusy}
+          >
+            <Text style={styles.btnOutlineText}>CHECK-IN RANK</Text>
+          </TouchableOpacity>
+
+          <View style={{ height: 10 }} />
+
+          <TouchableOpacity
+            style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
+            onPress={() =>
+              router.push({
+                pathname: "/organize/events/[id]/qr",
+                params: { id: eventRow.id },
+              })
+            }
+            disabled={deleteBusy}
+          >
+            <Text style={styles.btnOutlineText}>QR</Text>
+          </TouchableOpacity>
+
+          <View style={{ height: 10 }} />
 
           <TouchableOpacity
             style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
@@ -968,123 +1126,6 @@ export default function OrganizeEventDetail() {
 
           <View style={{ height: 10 }} />
 
-          <Row label="Attendee check" value={attendeeCheckStatus} />
-          <View style={{ height: 8 }} />
-          <TouchableOpacity
-            style={[styles.btnPrimary, (attendeeStartBusy || deleteBusy) && { opacity: 0.6 }]}
-            onPress={handleStartAttendeeCheck}
-            disabled={attendeeStartBusy || deleteBusy}
-          >
-            <Text style={styles.btnPrimaryText}>
-              {attendeeStartBusy ? "Starting…" : "START ATTENDEE CHECK"}
-            </Text>
-          </TouchableOpacity>
-
-          <View style={{ height: 8 }} />
-          <TouchableOpacity
-            style={[styles.btnOutline, (attendeeStopBusy || deleteBusy) && { opacity: 0.6 }]}
-            onPress={handleStopAttendeeCheck}
-            disabled={attendeeStopBusy || deleteBusy}
-          >
-            <Text style={styles.btnOutlineText}>
-              {attendeeStopBusy ? "Stopping…" : "STOP ATTENDEE CHECK"}
-            </Text>
-          </TouchableOpacity>
-
-          <View style={{ height: 8 }} />
-          <TouchableOpacity
-            style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
-            onPress={handleShowAttendeeStatus}
-            disabled={deleteBusy}
-          >
-            <Text style={styles.btnOutlineText}>CHECK STATUS</Text>
-          </TouchableOpacity>
-
-          {showDev ? (
-            <View style={styles.proofPanel}>
-              <Text style={styles.proofTitle}>PROOF LOG MARKER</Text>
-              <Row label="Entries" value={String(proofCount)} />
-              <Text style={styles.proofMono} numberOfLines={3}>
-                {proofLastLine}
-              </Text>
-
-              <View style={{ height: 8 }} />
-              <TouchableOpacity
-                style={[styles.btnOutline]}
-                onPress={showProofLog}
-                disabled={deleteBusy}
-              >
-                <Text style={styles.btnOutlineText}>VIEW PROOF LOG</Text>
-              </TouchableOpacity>
-
-              <View style={{ height: 8 }} />
-              <TouchableOpacity
-                style={[styles.btnOutline]}
-                onPress={handleClearProofLog}
-                disabled={deleteBusy}
-              >
-                <Text style={styles.btnOutlineText}>CLEAR PROOF LOG</Text>
-              </TouchableOpacity>
-            </View>
-          ) : null}
-
-          <View style={{ height: 16 }} />
-          <TouchableOpacity
-            style={[styles.btnPrimary, deleteBusy && { opacity: 0.6 }]}
-            onPress={() =>
-              router.push({
-                pathname: "/organize/events/[id]/qr",
-                params: { id: eventRow.id },
-              })
-            }
-            disabled={deleteBusy}
-          >
-            <Text style={styles.btnPrimaryText}>SHOW EVENT QR</Text>
-          </TouchableOpacity>
-
-          <View style={{ height: 10 }} />
-          <TouchableOpacity
-            style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
-            onPress={() =>
-              router.push({
-                pathname: "/organize/events/[id]/scan",
-                params: { id: eventRow.id },
-              } as any)
-            }
-            disabled={deleteBusy}
-          >
-            <Text style={styles.btnOutlineText}>SCAN (ORGANIZER)</Text>
-          </TouchableOpacity>
-
-          <View style={{ height: 10 }} />
-          <TouchableOpacity
-            style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
-            onPress={() =>
-              router.push({
-                pathname: "/organize/events/[id]/live",
-                params: { id: eventRow.id },
-              } as any)
-            }
-            disabled={deleteBusy}
-          >
-            <Text style={styles.btnOutlineText}>LIVE (ORGANIZER)</Text>
-          </TouchableOpacity>
-
-          <View style={{ height: 10 }} />
-          <TouchableOpacity
-            style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
-            onPress={() =>
-              router.push({
-                pathname: "/organize/events/[id]/checkin",
-                params: { id: eventRow.id },
-              })
-            }
-            disabled={deleteBusy}
-          >
-            <Text style={styles.btnOutlineText}>CHECK-IN LIST</Text>
-          </TouchableOpacity>
-
-          <View style={{ height: 10 }} />
           <TouchableOpacity
             style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
             onPress={() =>
@@ -1099,6 +1140,7 @@ export default function OrganizeEventDetail() {
           </TouchableOpacity>
 
           <View style={{ height: 10 }} />
+
           <TouchableOpacity
             style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
             onPress={() =>
@@ -1112,30 +1154,83 @@ export default function OrganizeEventDetail() {
             <Text style={styles.btnOutlineText}>SETTINGS</Text>
           </TouchableOpacity>
 
+          <View style={{ height: 14 }} />
+
+          <Row label="Attendee check" value="" />
+
+          <TouchableOpacity
+            style={styles.controlsToggle}
+            onPress={() => setControlsOpen((v) => !v)}
+            disabled={deleteBusy}
+          >
+            <Text style={[styles.controlsToggleText, deleteBusy && { opacity: 0.6 }]}>
+              {controlsOpen ? "Hide controls" : "Show controls"}
+            </Text>
+          </TouchableOpacity>
+
+          {controlsOpen ? (
+            <View style={styles.controlsPanel}>
+              <Row label="Status" value={attendeeCheckStatus} />
+
+              <View style={{ height: 8 }} />
+              <TouchableOpacity
+                style={[styles.btnPrimary, (attendeeStartBusy || deleteBusy) && { opacity: 0.6 }]}
+                onPress={handleStartAttendeeCheck}
+                disabled={attendeeStartBusy || deleteBusy}
+              >
+                <Text style={styles.btnPrimaryText}>{attendeeStartBusy ? "Starting…" : "START ATTENDEE CHECK"}</Text>
+              </TouchableOpacity>
+
+              <View style={{ height: 8 }} />
+              <TouchableOpacity
+                style={[styles.btnOutline, (attendeeStopBusy || deleteBusy) && { opacity: 0.6 }]}
+                onPress={handleStopAttendeeCheck}
+                disabled={attendeeStopBusy || deleteBusy}
+              >
+                <Text style={styles.btnOutlineText}>{attendeeStopBusy ? "Stopping…" : "STOP ATTENDEE CHECK"}</Text>
+              </TouchableOpacity>
+
+              <View style={{ height: 8 }} />
+              <TouchableOpacity
+                style={[styles.btnOutline, deleteBusy && { opacity: 0.6 }]}
+                onPress={handleShowAttendeeStatus}
+                disabled={deleteBusy}
+              >
+                <Text style={styles.btnOutlineText}>CHECK STATUS</Text>
+              </TouchableOpacity>
+
+              {showDev ? (
+                <View style={styles.proofPanel}>
+                  <Text style={styles.proofTitle}>PROOF LOG MARKER</Text>
+                  <Row label="Entries" value={String(proofCount)} />
+                  <Text style={styles.proofMono} numberOfLines={3}>
+                    {proofLastLine}
+                  </Text>
+
+                  <View style={{ height: 8 }} />
+                  <TouchableOpacity style={[styles.btnOutline]} onPress={showProofLog} disabled={deleteBusy}>
+                    <Text style={styles.btnOutlineText}>VIEW PROOF LOG</Text>
+                  </TouchableOpacity>
+
+                  <View style={{ height: 8 }} />
+                  <TouchableOpacity style={[styles.btnOutline]} onPress={handleClearProofLog} disabled={deleteBusy}>
+                    <Text style={styles.btnOutlineText}>CLEAR PROOF LOG</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
           <View style={{ height: 16 }} />
           <TouchableOpacity
             style={[styles.btnDanger, deleteBusy && { opacity: 0.6 }]}
             onPress={handleDeleteEvent}
             disabled={deleteBusy}
           >
-            <Text style={styles.btnDangerText}>
-              {deleteBusy ? "DELETING…" : "DELETE EVENT"}
-            </Text>
+            <Text style={styles.btnDangerText}>{deleteBusy ? "DELETING…" : "DELETE EVENT"}</Text>
           </TouchableOpacity>
         </View>
       )}
-
-      <View style={{ height: 20 }} />
-      <TouchableOpacity
-        style={[styles.linkBtn]}
-        onPress={() =>
-          Linking.openURL(
-            `https://www.google.com/maps/search/?api=1&query=${eventRow.venue_lat},${eventRow.venue_lng}`
-          )
-        }
-      >
-        <Text style={styles.linkBtnText}>OPEN IN GOOGLE MAPS</Text>
-      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -1168,7 +1263,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   rowLabel: { color: "#374151", fontWeight: "600" },
-  rowValue: { color: "#111827" },
+  rowValue: { color: "#111827", flexShrink: 1, textAlign: "right", marginLeft: 12 },
   sectionLabel: {
     fontSize: 14,
     fontWeight: "700",
@@ -1176,6 +1271,57 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 8,
   },
+
+  locationRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 6,
+  },
+  locationRight: {
+    flex: 1,
+    alignItems: "flex-end",
+    marginLeft: 12,
+  },
+  locationTopLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: 10,
+  },
+  subRowText: {
+    marginTop: 4,
+    color: "#6B7280",
+    fontSize: 12,
+    lineHeight: 16,
+    textAlign: "right",
+  },
+
+  btnOutlineSmall: {
+    borderWidth: 1,
+    borderColor: BLUE,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  btnOutlineSmallText: {
+    color: BLUE,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    fontSize: 12,
+  },
+
+  detailsToggle: {
+    alignSelf: "flex-start",
+    marginTop: 8,
+  },
+  detailsToggleText: {
+    color: BLUE,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+
   devPanel: {
     marginTop: 8,
     borderTopWidth: 1,
@@ -1222,18 +1368,6 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     letterSpacing: 0.5,
   },
-  linkBtn: {
-    marginHorizontal: 16,
-    borderRadius: 10,
-    paddingVertical: 14,
-    alignItems: "center",
-    backgroundColor: "#111827",
-  },
-  linkBtnText: {
-    color: "#fff",
-    fontWeight: "800",
-    letterSpacing: 0.4,
-  },
   rsvpRow: {
     flexDirection: "row",
     gap: 8,
@@ -1255,6 +1389,18 @@ const styles = StyleSheet.create({
   },
   rsvpChipTextActive: {
     color: "#fff",
+  },
+  controlsToggle: {
+    alignSelf: "flex-start",
+    marginTop: 6,
+  },
+  controlsToggleText: {
+    color: BLUE,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  controlsPanel: {
+    marginTop: 10,
   },
   proofPanel: {
     marginTop: 10,
