@@ -605,12 +605,20 @@ export default function OrganizeIndexScreen() {
   const closeManageGroups = useCallback(() => setManageOpen(false), []);
 
   const openGroup = useCallback(
-    (gid: string) => {
+    async (gid: string) => {
       closeManageGroups();
-      router.push({ pathname: "/organize/admin", params: { gid } });
+      setGroupId(gid);
+      if (formErrors.group) clearFieldError("group");
+      setSubmitError(null);
+      await fetchEventsForGroup(gid);
     },
-    [closeManageGroups, router]
+    [clearFieldError, closeManageGroups, fetchEventsForGroup, formErrors.group]
   );
+
+  const goToCreateGroups = useCallback(() => {
+    closeManageGroups();
+    router.push("/me/groups");
+  }, [closeManageGroups, router]);
 
   const validateIso = (s: string) => {
     const d = new Date(s);
@@ -1053,7 +1061,6 @@ export default function OrganizeIndexScreen() {
     lat,
     lng,
     radiusM,
-    runCreateLocationSafetyCheck,
     scrollToField,
     setErrorsAndScroll,
     showSafetyBlockAlert,
@@ -1654,7 +1661,7 @@ export default function OrganizeIndexScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Manage groups</Text>
-            <Text style={styles.modalBody}>Open a group admin screen.</Text>
+            <Text style={styles.modalBody}>Select a group or create a new one.</Text>
 
             <View style={{ height: 10 }} />
 
@@ -1676,8 +1683,8 @@ export default function OrganizeIndexScreen() {
                 <Text style={styles.modalBtnText}>Close</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.modalPrimaryBtn} onPress={() => router.push("/organize/admin")}>
-                <Text style={styles.modalPrimaryBtnText}>Open Admin</Text>
+              <TouchableOpacity style={styles.modalPrimaryBtn} onPress={goToCreateGroups}>
+                <Text style={styles.modalPrimaryBtnText}>Create groups</Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -1130,6 +1130,10 @@ Play に上がってるのが .internal だから、更新用 AAB も internal �
 
 いまの運用通り、AAB をアップしてリリース作れば OK。
 
+4. Google play では下記の URL で公開中
+
+https://play.google.com/store/apps/details?id=com.kenta0015.geoattendance.internal
+
 ### 1 点だけ“混乱ポイント”を整理
 
 あなたの app.config.js だと internal の android.versionCode が 7 になってるのに、実際は 8 で出てるよね。

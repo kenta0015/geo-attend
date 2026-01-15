@@ -1,4 +1,4 @@
-// app/(tabs)/organize/events/[id]/checkin.tsx
+/// app/(tabs)/organize/events/[id]/checkin.tsx
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import {
   View,
@@ -12,6 +12,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import Card from "../../../../ui/Card";
@@ -19,6 +20,7 @@ import Button from "../../../../ui/Button";
 import { COLORS, SPACING, RADIUS } from "@ui/theme";
 import { supabase } from "../../../../../lib/supabase";
 import { RSVP } from "../../../../../lib/types";
+import getAvatarSignedUrl from "../../../../../lib/avatarUrl";
 
 type Filter = "all" | "going" | "not_going";
 
@@ -27,6 +29,7 @@ type ListItem = {
   name: string;
   rsvp_status: RSVP;
   checked_in_at_utc?: string | null;
+  avatar_url?: string | null;
 };
 
 const PAGE_SIZE = 100;
@@ -54,6 +57,9 @@ export default function CheckinScreen() {
   const [unansweredCount, setUnansweredCount] = useState(0);
   const [memberTotalCount, setMemberTotalCount] = useState(0);
   const offsetRef = useRef(0);
+
+  const avatarUrlByUserIdRef = useRef<Map<string, string | null>>(new Map());
+  const avatarPathByUserIdRef = useRef<Map<string, string | null>>(new Map());
 
   const [nameModalOpen, setNameModalOpen] = useState(false);
   const [editUserId, setEditUserId] = useState<string | null>(null);
@@ -142,9 +148,16 @@ export default function CheckinScreen() {
         <View style={styles.row}>
           <View style={{ flex: 1, paddingRight: SPACING.sm }}>
             <View style={styles.nameLine}>
-              <Text style={styles.name} numberOfLines={1}>
-                {item.name || "(No name)"}
-              </Text>
+              <View style={styles.nameLeft}>
+                <AvatarThumb
+                  uri={item.avatar_url ?? null}
+                  name={item.name || "(No name)"}
+                  size={28}
+                />
+                <Text style={styles.name} numberOfLines={1}>
+                  {item.name || "(No name)"}
+                </Text>
+              </View>
               {item.rsvp_status !== null ? (
                 <LocalPill
                   label={item.rsvp_status === "going" ? "Going" : "Not going"}
@@ -373,7 +386,7 @@ export default function CheckinScreen() {
     // --- profiles (user_profile.user_id is TEXT so combinedIds can be used as-is) ---
     const { data: profileRowsRaw } = await supabase
       .from("user_profile")
-      .select("user_id, display_name, ice_name")
+      .select("user_id, display_name, ice_name, avatar_path")
       .in("user_id", combinedIds);
 
     const profileRows =
@@ -381,6 +394,7 @@ export default function CheckinScreen() {
         user_id: string;
         display_name: string | null;
         ice_name: string | null;
+        avatar_path: string | null;
       }[] | null) ?? [];
 
     const nameMap = new Map<string, string>();
@@ -388,6 +402,30 @@ export default function CheckinScreen() {
       const bestName = (p.display_name ?? p.ice_name ?? "").trim();
       nameMap.set(String(p.user_id), bestName);
     });
+
+    // --- avatar signed URLs (cache per user_id + avatar_path; fallback to initials when missing) ---
+    const toFetch: { uid: string; path: string | null }[] = [];
+    profileRows.forEach((p) => {
+      const uid = String(p.user_id);
+      const path = (p.avatar_path ?? null) as string | null;
+
+      const prevPath = avatarPathByUserIdRef.current.get(uid) ?? null;
+      const hasUrl = avatarUrlByUserIdRef.current.has(uid);
+
+      if (!hasUrl || prevPath !== path) {
+        toFetch.push({ uid, path });
+      }
+    });
+
+    if (toFetch.length > 0) {
+      await Promise.all(
+        toFetch.map(async ({ uid, path }) => {
+          const url = await getAvatarSignedUrl(path);
+          avatarPathByUserIdRef.current.set(uid, path);
+          avatarUrlByUserIdRef.current.set(uid, url);
+        })
+      );
+    }
 
     // --- attendance timestamps (only pass UUIDs to IN; limited to gps+qr) ---
     const uuidOnly = combinedIds.filter(isUuid);
@@ -425,6 +463,7 @@ export default function CheckinScreen() {
       name: (nameMap.get(uid) ?? "").trim() || "(No name)",
       rsvp_status: rsvpMap.get(uid) ?? null,
       checked_in_at_utc: attMap.get(uid) ?? null,
+      avatar_url: avatarUrlByUserIdRef.current.get(uid) ?? null,
     }));
 
     setItems((prev) => {
@@ -594,6 +633,45 @@ function LocalPill({
   );
 }
 
+function AvatarThumb(props: {
+  uri: string | null;
+  name: string;
+  size?: number;
+}) {
+  const size = props.size ?? 28;
+  const initials = useMemo(() => {
+    const raw = (props.name || "").trim();
+    if (!raw || raw === "(No name)" || raw.startsWith("(")) return "?";
+
+    const parts = raw.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      const a = parts[0].slice(0, 1);
+      const b = parts[1].slice(0, 1);
+      return `${a}${b}`.toUpperCase();
+    }
+
+    return raw.slice(0, 1).toUpperCase();
+  }, [props.name]);
+
+  return (
+    <View
+      style={[
+        styles.avatar,
+        { width: size, height: size, borderRadius: size / 2 },
+      ]}
+    >
+      {props.uri ? (
+        <Image
+          source={{ uri: props.uri }}
+          style={{ width: size, height: size, borderRadius: size / 2 }}
+        />
+      ) : (
+        <Text style={styles.avatarText}>{initials}</Text>
+      )}
+    </View>
+  );
+}
+
 function EditNameModal(props: {
   visible: boolean;
   saving: boolean;
@@ -703,8 +781,11 @@ function mergeItemsNonNullWins(prev: ListItem[], next: ListItem[]): ListItem[] {
     const merged: ListItem = {
       user_id: it.user_id,
       name: it.name && it.name !== "(No name)" ? it.name : existing.name,
-      rsvp_status: it.rsvp_status !== null ? it.rsvp_status : existing.rsvp_status,
-      checked_in_at_utc: it.checked_in_at_utc ?? existing.checked_in_at_utc ?? null,
+      rsvp_status:
+        it.rsvp_status !== null ? it.rsvp_status : existing.rsvp_status,
+      checked_in_at_utc:
+        it.checked_in_at_utc ?? existing.checked_in_at_utc ?? null,
+      avatar_url: it.avatar_url ?? existing.avatar_url ?? null,
     };
     map.set(it.user_id, merged);
   }
@@ -787,8 +868,27 @@ const styles = StyleSheet.create({
   nameLine: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: 8,
     marginBottom: SPACING.xs,
+  },
+  nameLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flex: 1,
+    minWidth: 0,
+  },
+  avatar: {
+    backgroundColor: COLORS.border,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  avatarText: {
+    fontSize: 12,
+    fontWeight: "800",
+    color: COLORS.text,
   },
   name: { fontSize: 16, fontWeight: "600", color: COLORS.text, flexShrink: 1 },
   sub: { fontSize: 12, color: COLORS.text, opacity: 0.8 },
