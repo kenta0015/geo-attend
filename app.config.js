@@ -72,6 +72,7 @@ export default ({ config }) => {
       buildNumber: "1",
       supportsTablet: false,
       infoPlist: {
+        ITSAppUsesNonExemptEncryption: false,
         UIBackgroundModes: ["location"],
         NSLocationWhenInUseUsageDescription:
           "We use your location to verify on-site attendance.",

@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import * as Crypto from "expo-crypto";
 import { supabase } from "../lib/supabase";
+import { devSwitchEnabled } from "../stores/devRole";
 
 type TokenParts = {
   v: string;
@@ -97,7 +98,7 @@ export default function JoinScreen() {
   const [loading, setLoading] = useState(false);
   const [didAutoNav, setDidAutoNav] = useState(false);
 
-  const showDev = __DEV__;
+  const showDev = devSwitchEnabled();
 
   useEffect(() => {
     let mounted = true;

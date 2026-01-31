@@ -23,6 +23,7 @@ import * as Crypto from "expo-crypto";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "./supabase";
 import { enqueue, flushOnce, GeoEventPayload } from "./syncQueue";
+import { notiAvailable } from "./safeNoti";
 
 export const GEOFENCE_TASK = "rta-geofence";
 
@@ -30,6 +31,10 @@ const ACTIVE_EVENT_KEY = "@rta.active_event_id"; // legacy (kept for backward co
 const ACTIVE_EVENT_META_KEY = "@rta.active_event_meta_v1";
 const LAST_EVENT_KEY = "@rta.geo.last.v1";
 const DEBOUNCE_SEC = 30;
+
+// Enable per-ENTER/EXIT notifications for all builds (including production).
+// Users will receive local notifications when entering/exiting geofence regions.
+const GEOFENCE_DEBUG_NOTI = true;
 
 type ActiveEventMeta = {
   event_id: string;
@@ -163,11 +168,44 @@ async function getActiveEventId(): Promise<string | null> {
 /** Best-effort local notification (safe in background); ignore errors. */
 async function notify(title: string, body: string) {
   try {
+    // Check if notifications are available (not on web/Expo Go Android)
+    if (!notiAvailable) {
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.log("[geofence] notifications not available (web/Expo Go)");
+      }
+      return;
+    }
+
+    // Check notification permissions (best-effort, don't block if check fails)
+    try {
+      const { status } = await Notifications.getPermissionsAsync();
+      if (status !== "granted") {
+        if (typeof __DEV__ !== "undefined" && __DEV__) {
+          console.warn("[geofence] notification permission not granted:", status);
+        }
+        return;
+      }
+    } catch (permErr) {
+      // Permission check failed, but continue anyway (might work)
+      if (typeof __DEV__ !== "undefined" && __DEV__) {
+        console.warn("[geofence] permission check failed:", permErr);
+      }
+    }
+
     await Notifications.scheduleNotificationAsync({
       content: { title, body },
       trigger: null,
     });
-  } catch {}
+
+    if (typeof __DEV__ !== "undefined" && __DEV__) {
+      console.log("[geofence] notification sent:", title, body);
+    }
+  } catch (e: any) {
+    // Log error for debugging (only in development)
+    if (typeof __DEV__ !== "undefined" && __DEV__) {
+      console.warn("[geofence] notification failed:", e?.message ?? String(e));
+    }
+  }
 }
 
 function nowIso() {
@@ -289,6 +327,18 @@ function defineTaskOnce() {
       if (!ok) {
         await enqueue(payload);
         await flushOnce(postToServer); // best-effort
+      }
+
+      // Local notification for ENTER/EXIT events (enabled for all builds).
+      // Users will be notified when entering or exiting the geofence region.
+      if (GEOFENCE_DEBUG_NOTI) {
+        const shortEvent = eventId.slice(0, 8);
+        const title = dir === "ENTER" ? "Geofence ENTER" : "Geofence EXIT";
+        const bodyParts = [
+          `event=${shortEvent}…`,
+          regionId ? `region=${regionId}` : null,
+        ].filter(Boolean);
+        await notify(title, bodyParts.join(" • "));
       }
     });
     __defined = true;

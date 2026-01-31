@@ -5,6 +5,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Stack } from "expo-router";
 import * as Notifications from "expo-notifications";
 import * as Updates from "expo-updates";
+import { notiAvailable, requestPerms } from "../lib/safeNoti";
 
 // Ensure the canonical geofence task is defined early (side-effect import).
 import "../lib/geofence";
@@ -27,20 +28,50 @@ const enableDev = devSwitchEnabled();
 
 console.info("[dev-switch] enableDev =", enableDev);
 
-Notifications.setNotificationHandler({
-  handleNotification: async (_n: Notifications.Notification) => ({
-    shouldPlaySound: false,
-    shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+// Safely set notification handler (wrap in try-catch for iPad compatibility)
+try {
+  Notifications.setNotificationHandler({
+    handleNotification: async (_n: Notifications.Notification) => ({
+      shouldPlaySound: false,
+      shouldSetBadge: false,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  });
+} catch (e) {
+  console.warn("[RootLayout] setNotificationHandler failed:", e);
+}
 
 export default function RootLayout() {
   useEffect(() => {
+    // Safely set notification category (iPad compatibility)
     if (Platform.OS === "ios") {
-      Notifications.setNotificationCategoryAsync?.("default", []);
+      try {
+        Notifications.setNotificationCategoryAsync?.("default", []).catch((e) => {
+          console.warn("[RootLayout] setNotificationCategoryAsync failed:", e);
+        });
+      } catch (e) {
+        console.warn("[RootLayout] setNotificationCategoryAsync sync error:", e);
+      }
     }
+
+    // Request notification permissions on app start (best-effort, non-blocking)
+    (async () => {
+      if (notiAvailable) {
+        try {
+          const { status } = await Notifications.getPermissionsAsync();
+          if (status === "undetermined") {
+            console.info("[RootLayout] requesting notification permissions...");
+            const granted = await requestPerms();
+            console.info("[RootLayout] notification permission:", granted ? "granted" : "denied");
+          } else {
+            console.info("[RootLayout] notification permission already:", status);
+          }
+        } catch (e) {
+          console.warn("[RootLayout] notification permission check failed:", e);
+        }
+      }
+    })();
 
     (async () => {
       try {

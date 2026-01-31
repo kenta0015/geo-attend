@@ -66,51 +66,60 @@ export default function PermissionsGate({ children }: Props) {
     }, GLOBAL_BAILOUT_MS);
 
     (async () => {
-      // 1) Foreground permission check → request if needed
-      const fgStat = await runStep("fg-perm-check", () => Location.getForegroundPermissionsAsync());
-      if (!fgStat?.granted) {
-        await runStep("fg-perm-request", async () => {
-          const r = await Location.requestForegroundPermissionsAsync();
-          if (!r.granted) throw new Error(`foreground denied (status=${r.status})`);
-          return r;
-        });
-      }
-
-      // 2) Check if location services (GPS, etc.) are enabled
-      const services = await runStep("services-check", () => Location.hasServicesEnabledAsync());
-      if (services === false) {
-        warn("Location services are OFF");
-        setErrors((s) => [...s, "Location services are OFF"]);
-        // We proceed anyway. If needed, guide users via Linking.openSettings().
-      }
-
-      // 3) Background permission — TEMPORARILY SKIPPED to avoid manifest warning
-      await runStep("bg-perm-skip", async () => {
-        log("Background permission check is intentionally skipped (no manifest entry).");
-      });
-
-      // 4) One-shot current position (low → high accuracy fallback)
-      const got = await runStep("get-location", async () => {
-        try {
-          const low = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-            mayShowUserSettingsDialog: true,
+      try {
+        // 1) Foreground permission check → request if needed
+        const fgStat = await runStep("fg-perm-check", () => Location.getForegroundPermissionsAsync());
+        if (!fgStat?.granted) {
+          await runStep("fg-perm-request", async () => {
+            const r = await Location.requestForegroundPermissionsAsync();
+            if (!r.granted) throw new Error(`foreground denied (status=${r.status})`);
+            return r;
           });
-          return { phase: "low", coords: low.coords };
-        } catch (e) {
-          warn("low-accuracy getCurrentPosition failed; retry high accuracy", String((e as any)?.message ?? e));
-          const hi = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Highest,
-            mayShowUserSettingsDialog: true,
-          });
-          return { phase: "high", coords: hi.coords };
         }
-      });
-      if (!got) warn("get-location produced no fix (timeout or error) — continuing");
 
-      setPhase("ready");
-      setMessage("Ready");
-      clearTimeout(globalBail);
+        // 2) Check if location services (GPS, etc.) are enabled
+        const services = await runStep("services-check", () => Location.hasServicesEnabledAsync());
+        if (services === false) {
+          warn("Location services are OFF");
+          setErrors((s) => [...s, "Location services are OFF"]);
+          // We proceed anyway. If needed, guide users via Linking.openSettings().
+        }
+
+        // 3) Background permission — TEMPORARILY SKIPPED to avoid manifest warning
+        await runStep("bg-perm-skip", async () => {
+          log("Background permission check is intentionally skipped (no manifest entry).");
+        });
+
+        // 4) One-shot current position (low → high accuracy fallback)
+        const got = await runStep("get-location", async () => {
+          try {
+            const low = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+              mayShowUserSettingsDialog: true,
+            });
+            return { phase: "low", coords: low.coords };
+          } catch (e) {
+            warn("low-accuracy getCurrentPosition failed; retry high accuracy", String((e as any)?.message ?? e));
+            const hi = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Highest,
+              mayShowUserSettingsDialog: true,
+            });
+            return { phase: "high", coords: hi.coords };
+          }
+        });
+        if (!got) warn("get-location produced no fix (timeout or error) — continuing");
+
+        setPhase("ready");
+        setMessage("Ready");
+        clearTimeout(globalBail);
+      } catch (e) {
+        err("FATAL: PermissionsGate initialization failed:", e);
+        setErrors((s) => [...s, `Fatal error: ${String(e)}`]);
+        // Force ready to prevent app from being stuck
+        setPhase("ready");
+        setMessage("Ready (with errors)");
+        clearTimeout(globalBail);
+      }
     })();
 
     return () => clearTimeout(globalBail);

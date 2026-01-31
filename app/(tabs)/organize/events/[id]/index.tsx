@@ -19,7 +19,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { supabase } from "../../../../../lib/supabase";
 import { haversineMeters, accuracyThreshold } from "../../../../../lib/geo";
 import { getGuestId } from "../../../../../stores/session";
-import { useEffectiveRole } from "../../../../../stores/devRole";
+import { useEffectiveRole, devSwitchEnabled } from "../../../../../stores/devRole";
 import { armGeofenceAt, disarmGeofence, geofenceStatus } from "../../../../../lib/geofenceActions";
 
 type EventRow = {
@@ -246,7 +246,7 @@ export default function OrganizeEventDetail() {
   }, [pathname, eid]);
 
   const role = useEffectiveRole();
-  const showDev = __DEV__;
+  const showDev = devSwitchEnabled();
 
   // === Proof log preview ======================================================
   const [proofLastLine, setProofLastLine] = useState<string>("—");
